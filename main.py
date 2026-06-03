@@ -9,9 +9,8 @@ from astrbot.api import logger
 from astrbot.api.message_components import Plain, At, Image
 
 @register("Astrbot_plugin_bili_Randomvideoshit", "Rasutohda",
-          "有人@机器人时随机从B站搬运一个视频（支持分区、切换发送形式、敏感词过滤）", "2.0.1",
+          "有人@机器人时随机从B站搬运一个视频（支持分区、切换发送形式、敏感词过滤）", "2.0.2",
           "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit")
-# 已移除 priority=0，该参数不被 register 支持
 class BiliRandomVideo(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -262,33 +261,35 @@ class BiliRandomVideo(Star):
             logger.error(f"处理@消息异常: {e}\n{traceback.format_exc()}")
             await event.reply(f"❌ 处理出错: {str(e)}")
 
-    # ------------------- 指令：重载配置 -------------------
-    @filter(commands=["/bili reload"])
-    async def reload_config_command(self, event: AstrMessageEvent):
-        """手动重载配置文件（无需重启）"""
-        try:
-            self.load_config()
-            yield event.plain_result("✅ 配置已重新加载")
-        except Exception as e:
-            logger.error(f"重载配置失败: {e}")
-            yield event.plain_result(f"❌ 重载配置失败: {str(e)}")
-
     # ------------------- 全局过滤器（核心拦截） -------------------
     @filter
     async def message_filter(self, event: AstrMessageEvent) -> bool:
-        """检测是否@机器人，若是则处理并阻止其他插件继续处理"""
+        """检测是否@机器人或执行命令，若是则处理并阻止其他插件继续处理"""
         logger.debug(f"[Filter] 收到消息: {event.message_str}")
         
+        # 优先处理命令 /bili reload（不依赖@）
+        if event.message_str.strip().startswith("/bili reload"):
+            logger.info("[Filter] 检测到重载配置命令")
+            try:
+                self.load_config()
+                await event.reply("✅ 配置已重新加载")
+            except Exception as e:
+                logger.error(f"重载配置失败: {e}")
+                await event.reply(f"❌ 重载配置失败: {str(e)}")
+            # 命令处理后阻止消息继续传播
+            return False
+        
+        # 然后检测是否@机器人
         is_at_me = await self._is_at_bot(event)
         
         if is_at_me:
             logger.info("[Filter] 检测到@机器人，开始处理并阻止其他插件")
             await self.handle_at_message(event)
-            # 返回 False 表示不继续传递给其他插件
             return False
-        else:
-            logger.debug("[Filter] 未检测到@机器人，放行")
-            return True
+        
+        # 其他消息放行
+        logger.debug("[Filter] 未检测到@机器人，放行")
+        return True
     
     async def _is_at_bot(self, event: AstrMessageEvent) -> bool:
         """跨平台检测是否@了本机器人"""
