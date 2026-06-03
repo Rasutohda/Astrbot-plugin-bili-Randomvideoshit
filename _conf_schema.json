@@ -1,36 +1,40 @@
 {
-    "keywords": {
-        "description": "触发关键词",
+    "use_whitelist_mode": {
+        "description": "使用白名单模式（否则为黑名单模式）",
+        "type": "bool",
+        "default": false
+    },
+    "whitelist_groups": {
+        "description": "白名单群号列表",
         "type": "list",
-        "items": {"type": "string"},
-        "default": ["随机视频", "来点视频", "随机B站"]
+        "items": { "type": "string" },
+        "default": []
     },
-    "send_type": {
-        "description": "发送形式",
-        "type": "string",
-        "options": ["image", "text"],
-        "labels": ["图文消息", "纯文本"],
-        "default": "image"
+    "blacklist_groups": {
+        "description": "黑名单群号列表",
+        "type": "list",
+        "items": { "type": "string" },
+        "default": []
     },
-    "show_processing": {
-        "description": "显示「正在搬运」提示",
+    "scan_interval": {
+        "description": "定时自动推送间隔（秒）",
+        "type": "int",
+        "default": 3600
+    },
+    "auto_start": {
+        "description": "插件启动时自动开启定时推送",
         "type": "bool",
         "default": true
     },
-    "max_retries": {
-        "description": "API请求最大重试次数",
-        "type": "int",
-        "default": 3
+    "keywords": {
+        "description": "触发推送的关键词列表（消息包含任意一个即触发）",
+        "type": "list",
+        "items": { "type": "string" },
+        "default": ["随机视频", "来点视频", "B站视频"]
     },
-    "max_video_age_days": {
-        "description": "视频最大发布天数限制 (0为不限制)",
+    "keyword_cooldown_seconds": {
+        "description": "关键词触发冷却时间（秒），每个群单独计算",
         "type": "int",
-        "default": 7
-    },
-    "cookie": {
-        "description": "B站登录Cookie",
-        "type": "string",
-        "hint": "从浏览器复制Cookie字符串，例如: SESSDATA=xxx; bili_jct=xxx; buvid3=xxx",
-        "default": ""
+        "default": 600
     }
 }
