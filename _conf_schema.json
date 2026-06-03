@@ -1,43 +1,40 @@
 {
     "keywords": {
         "description": "触发关键词",
-        "hint": "当用户消息包含以下任意关键词时触发。支持中英文。",
         "type": "list",
-        "items": {
-            "type": "string"
-        },
-        "default": ["随机视频", "来点视频", "随机B站", "来一个视频"]
+        "items": {"type": "string"},
+        "default": ["随机视频", "来点视频", "随机B站"]
     },
     "send_type": {
         "description": "发送形式",
-        "hint": "选择以图文消息还是纯文本形式发送。",
         "type": "string",
         "options": ["image", "text"],
-        "labels": ["图文消息 (封面图+信息)", "纯文本 (仅信息)"],
+        "labels": ["图文消息", "纯文本"],
         "default": "image"
     },
     "show_processing": {
-        "description": "发送“正在搬运”提示",
-        "hint": "是否在获取视频前先发送“正在搬运”的提示消息。",
+        "description": "显示「正在搬运」提示",
         "type": "bool",
         "default": true
     },
     "max_retries": {
-        "description": "最大重试次数",
-        "hint": "获取视频失败时的最大重试次数。",
+        "description": "API请求最大重试次数",
         "type": "int",
         "default": 3
     },
-    "hot_series_id": {
-        "description": "热门视频系列ID",
-        "hint": "指定获取哪个热榜系列的视频。保持默认0即可，会自动获取全站热门。",
-        "type": "int",
-        "default": 0
-    },
     "max_video_age_days": {
-        "description": "视频最大发布天数限制",
-        "hint": "限制获取的视频最晚在几天内发布。设置为0表示不限制。",
+        "description": "视频最大发布天数限制 (0为不限制)",
         "type": "int",
         "default": 7
+    },
+    "credential": {
+        "description": "B站登录凭证",
+        "type": "dict",
+        "hint": "用于规避风控，提高请求稳定性",
+        "props": {
+            "sessdata": {"type": "string", "description": "SESSDATA Cookie值", "default": ""},
+            "bili_jct": {"type": "string", "description": "bili_jct Cookie值", "default": ""},
+            "buvid3": {"type": "string", "description": "buvid3 Cookie值", "default": ""}
+        }
     }
 }
