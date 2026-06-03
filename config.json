@@ -1,6 +1,8 @@
 {
-    "region": "动画",
+    "keywords": ["随机视频", "来点视频", "随机B站", "来一个视频"],
     "send_type": "image",
-    "block_keywords": ["政治", "低俗"],
-    "show_processing": false
+    "show_processing": true,
+    "max_retries": 3,
+    "hot_series_id": 0,
+    "max_video_age_days": 7
 }
