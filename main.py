@@ -10,20 +10,18 @@ import aiohttp
 from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
-import qrcode
 
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api import logger
 from astrbot.api.message_components import Plain, Image
 
+# 导入扫码登录模块
+from .bili_login import BiliLogin
+
 # ---------- 数据目录 ----------
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
-
-# ---------- B站API端点 ----------
-QR_GENERATE_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
-QR_POLL_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
 
 # ---------- WBI签名助手 ----------
 class WbiHelper:
@@ -69,7 +67,7 @@ def normalize_title(title: str) -> str:
 
 # ---------- 主插件类 ----------
 @register("astrbot_plugin_bili_Randomvideoshit", "Rasutohda",
-          "B站随机视频搬运｜扫码登录｜关键词触发｜定时推送", "3.0.2",
+          "B站随机视频搬运｜扫码登录｜关键词触发｜定时推送", "3.0.4",
           "https://github.com/Rasutohda/astrbot_plugin_bili_Randomvideoshit")
 class BiliRandomVideo(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -78,6 +76,7 @@ class BiliRandomVideo(Star):
         self.running = False
         self.task = None
         self.session = None
+        self.bili_login = None
         self.cookie = self._load_cookie()
         self.bound_groups: Dict[str, str] = self._load_json("bound_groups.json", {})
         self.sent_titles: Dict[str, dict] = self._load_json("sent_titles.json", {})
@@ -108,6 +107,7 @@ class BiliRandomVideo(Star):
     # ---------- 初始化/卸载 ----------
     async def initialize(self):
         self.session = aiohttp.ClientSession()
+        self.bili_login = BiliLogin(self.session)
         if self.config.get('auto_start', True):
             self.running = True
             self.task = asyncio.create_task(self._timer_loop())
@@ -248,13 +248,11 @@ class BiliRandomVideo(Star):
     @filter.event_message_type("group_message")
     async def on_group_message(self, event: AstrMessageEvent):
         group_id = str(event.message_obj.group_id)
-        # 自动记录群
         if group_id not in self.bound_groups:
             self.bound_groups[group_id] = event.unified_msg_origin
             self._save_json("bound_groups.json", self.bound_groups)
             logger.info(f"📌 自动记录新群: {group_id}")
 
-        # 关键词触发
         keywords = self.config.get('keywords', ["随机视频", "来点视频", "B站视频"])
         if not keywords:
             return
@@ -265,16 +263,15 @@ class BiliRandomVideo(Star):
         cooldown_sec = self.config.get('keyword_cooldown_seconds', 600)
         last = self.group_cooldown.get(group_id, 0)
         if now - last < cooldown_sec:
-            logger.debug(f"群 {group_id} 关键词触发冷却中")
             return
-        logger.info(f"群 {group_id} 触发关键词，开始推送")
+        logger.info(f"群 {group_id} 触发关键词")
         await event.send(event.plain_result("🎬 检测到关键词，正在搬运视频..."))
         success = await self._push_to_target_group(group_id, event.unified_msg_origin, event)
         if success:
             self.group_cooldown[group_id] = now
             self._save_json("group_cooldown.json", self.group_cooldown)
         else:
-            await event.send(event.plain_result("❌ 暂时没有合适的视频，请稍后再试"))
+            await event.send(event.plain_result("❌ 暂时没有合适的视频"))
 
     # ---------- 命令 ----------
     @filter.command("bili now")
@@ -289,7 +286,7 @@ class BiliRandomVideo(Star):
         group_id = str(event.message_obj.group_id)
         success = await self._push_to_target_group(group_id, event.unified_msg_origin, event)
         if not success:
-            yield event.plain_result("❌ 没找到合适的视频，换个时间试试吧~")
+            yield event.plain_result("❌ 没找到合适的视频")
 
     @filter.command("bili on")
     async def cmd_on(self, event: AstrMessageEvent):
@@ -313,48 +310,22 @@ class BiliRandomVideo(Star):
 
     @filter.command("bili login")
     async def cmd_login(self, event: AstrMessageEvent):
-        async with self.session.post(QR_GENERATE_URL, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/'}) as resp:
-            data = await resp.json()
-            if data.get('code') != 0:
-                yield event.plain_result("❌ 获取二维码失败，请稍后再试")
-                return
-            qrcode_key = data['data']['qrcode_key']
-            qr_url = data['data']['url']
-        qr = qrcode.make(qr_url)
-        qr_path = DATA_DIR / f"qrcode_{int(time.time())}.png"
-        qr.save(qr_path)
-        await event.send(event.make_result().file_image(str(qr_path)))
-        await event.send(event.plain_result("🔗 请使用B站手机App扫码登录，有效期3分钟"))
-        for _ in range(60):
-            await asyncio.sleep(3)
-            async with self.session.get(QR_POLL_URL, params={'qrcode_key': qrcode_key}, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/'}) as resp:
-                poll_data = await resp.json()
-                if poll_data.get('code') == 0:
-                    cookie_dict = {}
-                    set_cookie_headers = resp.headers.getall('Set-Cookie', [])
-                    for header in set_cookie_headers:
-                        cookie_part = header.split(';')[0].strip()
-                        if '=' in cookie_part:
-                            k, v = cookie_part.split('=', 1)
-                            cookie_dict[k] = v
-                    sessdata = cookie_dict.get('SESSDATA', '')
-                    bili_jct = cookie_dict.get('bili_jct', '')
-                    buvid3 = cookie_dict.get('buvid3', '')
-                    if sessdata and bili_jct:
-                        cookie_str = f"SESSDATA={sessdata}; bili_jct={bili_jct}; buvid3={buvid3}"
-                        self.cookie = cookie_str
-                        self._save_cookie(cookie_str)
-                        yield event.plain_result(f"✅ 登录成功！Cookie已保存。\n用户名：{poll_data['data']['user_info']['uname']}")
-                        break
-                elif poll_data.get('code') == 86038:
-                    yield event.plain_result("⏱️ 二维码已过期，请重新执行 /bili login")
-                    break
+        """扫码登录B站"""
+        async def send_callback(data):
+            if isinstance(data, str) and data.endswith('.png'):
+                # 发送图片
+                await event.send(event.make_result().file_image(data))
+            else:
+                await event.send(event.plain_result(data))
+        
+        yield event.plain_result("🔐 正在生成登录二维码...")
+        cookie = await self.bili_login.login(event_callback=send_callback)
+        if cookie:
+            self.cookie = cookie
+            self._save_cookie(cookie)
+            yield event.plain_result("✅ 登录成功！Cookie已保存")
         else:
-            yield event.plain_result("⏱️ 扫码超时，请重新执行 /bili login")
-        try:
-            qr_path.unlink()
-        except:
-            pass
+            yield event.plain_result("❌ 登录失败或超时，请重新执行 /bili login")
 
     @filter.command("bili status")
     async def cmd_status(self, event: AstrMessageEvent):
