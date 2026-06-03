@@ -6,7 +6,8 @@ import time
 import aiohttp
 from typing import Optional, Dict, Any
 from astrbot.api.star import Context, Star, register
-from astrbot.api.event import AstrMessageEvent
+from astrbot.api.event import AstrMessageEvent, MessageEventResult
+from astrbot.api.event.filter import event_message_type, EventMessageType
 from astrbot.api.message_components import Plain, Image
 
 logger = logging.getLogger(__name__)
@@ -15,17 +16,17 @@ logger = logging.getLogger(__name__)
     "astrbot_plugin_bili_random",
     "Rasutohda",
     "通过关键词触发，随机搬运B站视频（支持配置）",
-    "3.0.3",
+    "3.0.4",
     "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit"
 )
 class BiliRandomVideo(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         self.config = self._load_config()
-        # 注册消息事件处理器（替代所有装饰器）
-        self.handler_id = context.register_event_handler(
-            AstrMessageEvent, self.on_message, priority=0
-        )
+        # 如果传入的 config 不为空，合并覆盖
+        if config:
+            self.config.update(config)
+            logger.info("应用外部配置")
 
     def _load_config(self) -> dict:
         default_config = {
@@ -53,44 +54,46 @@ class BiliRandomVideo(Star):
         self.config = self._load_config()
         logger.info("配置已重载")
 
-    async def on_message(self, event: AstrMessageEvent) -> bool:
-        """消息事件处理器，返回 True 放行，False 阻止传播"""
+    @event_message_type(EventMessageType.ALL)
+    async def on_message(self, event: AstrMessageEvent) -> MessageEventResult:
+        """处理所有消息事件"""
         msg = event.message_str.strip()
 
         # 命令：重载配置
         if msg == "!bili reload":
             self.reload_config()
-            await event.reply("✅ 配置已重新加载")
-            return False
+            return event.plain_result("✅ 配置已重新加载")
 
         # 关键词检测
         keywords = self.config.get("keywords", ["随机视频"])
         if not any(kw in msg for kw in keywords):
-            return True  # 不匹配，放行
+            # 不匹配，不回复任何消息（返回 None 或不返回消息）
+            return event.plain_result(None)
 
         # 发送处理中提示（可选）
         if self.config.get("show_processing", True):
-            await event.reply("🎬 正在搬运，请稍等~")
+            await event.send(event.plain_result("🎬 正在搬运，请稍等~"))
 
         # 获取随机视频
         video = await self.fetch_random_video()
         if not video:
-            await event.reply("❌ 获取视频失败，请稍后再试")
-            return False
+            return event.plain_result("❌ 获取视频失败，请稍后再试")
 
         # 发送结果
         send_type = self.config.get("send_type", "image")
         text = self._format_video_text(video)
         if send_type == "image" and video.get("pic"):
             try:
-                await event.reply([Image.fromURL(video["pic"]), Plain(text)])
+                chain = [Image.fromURL(video["pic"]), Plain(text)]
+                await event.send(event.make_result().message(chain))
             except Exception as e:
                 logger.error(f"图片发送失败: {e}，降级为纯文本")
-                await event.reply(text)
+                await event.send(event.plain_result(text))
         else:
-            await event.reply(text)
+            await event.send(event.plain_result(text))
 
-        return False  # 已处理，阻止继续传播
+        # 返回空结果，表示已经回复
+        return event.plain_result(None)
 
     def _format_video_text(self, video: dict) -> str:
         return (
@@ -173,9 +176,3 @@ class BiliRandomVideo(Star):
         if num >= 10000:
             return f"{num/10000:.1f}万"
         return str(num)
-
-    async def unload(self):
-        """插件卸载时注销事件处理器"""
-        if hasattr(self, 'handler_id'):
-            self.context.unregister_event_handler(self.handler_id)
-            logger.info("已注销消息事件处理器")
