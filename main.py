@@ -17,8 +17,8 @@ from http.cookies import SimpleCookie
 
 import qrcode
 
-from astrbot.api.star import Context, Star, register
-from astrbot.api.event import AstrMessageEvent
+from astrbot.api.star import Star, Context
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api import logger
 from astrbot.api.message_components import Plain, Image
 
@@ -101,9 +101,6 @@ def atomic_write_json(path: Path, data: dict):
     tmp_path.replace(path)
 
 # ---------- 插件主类 ----------
-@register("astrbot_plugin_bili_Randomvideoshit", "Rasutohda",
-          "B站随机视频搬运｜扫码登录｜关键词触发｜定时推送", "3.5.0",
-          "https://github.com/Rasutohda/astrbot_plugin_bili_Randomvideoshit")
 class BiliRandomVideo(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
@@ -155,7 +152,6 @@ class BiliRandomVideo(Star):
             return ""
 
     def _save_cookie(self, cookie: str):
-        # 安全提示：cookie.txt 包含敏感信息，请确保文件权限正确
         (DATA_DIR / "cookie.txt").write_text(cookie, encoding='utf-8')
 
     # ---------- 初始化/卸载 ----------
@@ -301,21 +297,23 @@ class BiliRandomVideo(Star):
             p.unlink()
 
     # ---------- 消息构建与发送 ----------
-    def _build_message_chain(self, video: dict) -> list:
-        text = (
-            f"🎬 {video['title']}\n"
-            f"👤 {video['author']}\n"
-            f"👍 {format_number(video['like'])}  ♥️ {format_number(video['coin'])}  ⭐ {format_number(video['favorite'])}\n"
-            f"💬 {format_number(video['danmaku'])}  📺 {format_number(video['play'])}\n"
-            f"🔗 {video['url']}"
-        )
-        return [Image.fromURL(video['pic']), Plain(text)] if video.get('pic') else [Plain(text)]
+    def _build_message_chain(self, video: dict) -> MessageChain:
+        """构建图文消息链"""
+        chain = MessageChain()
+        if video.get('pic'):
+            chain.chain.append(Image.fromURL(video['pic']))
+        chain.chain.append(Plain(f"🎬 {video['title']}"))
+        chain.chain.append(Plain(f"👤 {video['author']}"))
+        chain.chain.append(Plain(f"👍 {format_number(video['like'])}  ♥️ {format_number(video['coin'])}  ⭐ {format_number(video['favorite'])}"))
+        chain.chain.append(Plain(f"💬 {format_number(video['danmaku'])}  📺 {format_number(video['play'])}"))
+        chain.chain.append(Plain(f"🔗 {video['url']}"))
+        return chain
 
     async def _send_to_target(self, target, video: dict):
         """target可以是AstrMessageEvent或unified_msg_origin字符串"""
         chain = self._build_message_chain(video)
         if isinstance(target, AstrMessageEvent):
-            await target.send(target.make_result().message(chain))
+            yield target.chain_result(chain.chain)
         else:
             await self.context.send_message(target, chain)
 
@@ -323,9 +321,10 @@ class BiliRandomVideo(Star):
         """通过事件推送视频到当前群/私聊"""
         video = await self._fetch_random_video()
         if not video:
-            await event.send(event.plain_result("❌ 没找到合适的视频"))
+            yield event.chain_result([Plain("❌ 没找到合适的视频")])
             return False
-        await self._send_to_target(event, video)
+        async for _ in self._send_to_target(event, video):
+            pass
         self._record_sent_video(video)
         return True
 
@@ -404,11 +403,9 @@ class BiliRandomVideo(Star):
                 code = poll_data.get("data", {}).get("code", -1)
 
                 if code == QRCodeStatus.SUCCESS:
-                    # 正确解析 SimpleCookie
                     cookie_jar = SimpleCookie()
                     for header in set_cookie_headers:
                         cookie_jar.load(header)
-                    # 安全取值
                     sessdata = cookie_jar.get('SESSDATA', '').value if 'SESSDATA' in cookie_jar else ''
                     bili_jct = cookie_jar.get('bili_jct', '').value if 'bili_jct' in cookie_jar else ''
                     buvid3 = cookie_jar.get('buvid3', '').value if 'buvid3' in cookie_jar else ''
@@ -447,81 +444,86 @@ class BiliRandomVideo(Star):
 
     async def _notify_user(self, origin: str, message: str):
         try:
-            await self.context.send_message(origin, message)
+            # 纯文本消息使用 MessageChain
+            await self.context.send_message(origin, MessageChain([Plain(message)]))
         except Exception as e:
             logger.error(f"发送消息给 {origin} 失败: {e}")
 
-    # ---------- 核心事件处理 ----------
-    async def handle_event(self, event) -> bool:
-        if not isinstance(event, AstrMessageEvent):
-            return True
+    # ---------- 命令处理（使用装饰器）----------
+    @filter.command("bili")
+    async def bili_command(self, event: AstrMessageEvent):
+        """处理 bili 命令"""
+        msg = event.message_str.strip()
+        if not msg.startswith(('bili', '/bili')):
+            return
+        # 去除命令前缀
+        if msg.startswith('/bili'):
+            msg = msg[1:]
+        parts = msg.split()
+        cmd = parts[1] if len(parts) > 1 else ''
+        args = parts[2:] if len(parts) > 2 else []
+        
+        # 分发到各个子命令
+        if cmd == 'now':
+            async for _ in self._cmd_now(event):
+                pass
+        elif cmd == 'on':
+            async for _ in self._cmd_on(event):
+                pass
+        elif cmd == 'off':
+            async for _ in self._cmd_off(event):
+                pass
+        elif cmd == 'login':
+            async for _ in self._cmd_login(event):
+                pass
+        elif cmd == 'status':
+            async for _ in self._cmd_status(event):
+                pass
+        elif cmd == 'mode' and args:
+            async for _ in self._cmd_mode(event, args[0]):
+                pass
+        elif cmd == 'interval' and args:
+            async for _ in self._cmd_interval(event, args[0]):
+                pass
+        elif cmd == 'clear':
+            async for _ in self._cmd_clear(event):
+                pass
+        elif cmd == 'help':
+            async for _ in self._cmd_help(event):
+                pass
+        else:
+            yield event.chain_result([Plain("可用命令: bili now, on, off, login, status, mode, interval, clear, help")])
 
+    # ---------- 关键词触发 ----------
+    @filter.on_message(priority=10)
+    async def on_keyword(self, event: AstrMessageEvent):
+        """处理关键词触发（仅群聊）"""
         msg = event.message_str.strip()
         if not msg:
-            return True
-
-        # 区分群聊和私聊
+            return
         group_id = str(event.message_obj.group_id) if event.message_obj.group_id else None
-        is_group = group_id is not None
-
-        # 记录新群
-        if is_group and group_id not in self.bound_groups:
+        if group_id is None:
+            return  # 私聊不触发关键词
+        # 自动记录群
+        if group_id not in self.bound_groups:
             await self._record_group(group_id, event.unified_msg_origin)
+        keywords = self.config.get('keywords', [])
+        triggered = any(kw in msg for kw in keywords)
+        if triggered:
+            now = time.time()
+            cooldown = self.config.get('keyword_cooldown_seconds', 600)
+            last = self.group_cooldown.get(group_id, 0)
+            if now - last >= cooldown:
+                yield event.chain_result([Plain("🎬 检测到关键词，正在搬运视频...")])
+                success = await self._push_to_target_group(event)
+                if success:
+                    self.group_cooldown[group_id] = now
+                    self._save_json("group_cooldown.json", self.group_cooldown)
+            else:
+                remain = int(cooldown - (now - last))
+                yield event.chain_result([Plain(f"⏳ 冷却中，请 {remain} 秒后再试")])
 
-        # 命令处理
-        if msg.startswith('bili ') or msg.startswith('/bili ') or msg in ('bili', '/bili'):
-            if msg.startswith('/'):
-                msg = msg[1:]
-            parts = msg.split()
-            cmd = parts[1] if len(parts) > 1 else ''
-            await self._handle_command(event, cmd, parts[2:] if len(parts) > 2 else [])
-            return False
-
-        # 关键词触发（仅群聊）
-        if is_group:
-            keywords = self.config.get('keywords', [])
-            # 避免多个关键词同时匹配导致多次触发
-            triggered = any(kw in msg for kw in keywords)
-            if triggered:
-                now = time.time()
-                cooldown = self.config.get('keyword_cooldown_seconds', 600)
-                last = self.group_cooldown.get(group_id, 0)
-                if now - last >= cooldown:
-                    await event.send(event.plain_result("🎬 检测到关键词，正在搬运视频..."))
-                    success = await self._push_to_target_group(event)
-                    if success:
-                        self.group_cooldown[group_id] = now
-                        self._save_json("group_cooldown.json", self.group_cooldown)
-                else:
-                    remain = int(cooldown - (now - last))
-                    await event.send(event.plain_result(f"⏳ 冷却中，请 {remain} 秒后再试"))
-                return False
-
-        return True
-
-    async def _handle_command(self, event: AstrMessageEvent, cmd: str, args: List[str]):
-        """分发命令"""
-        if cmd == 'now':
-            await self._cmd_now(event)
-        elif cmd == 'on':
-            await self._cmd_on(event)
-        elif cmd == 'off':
-            await self._cmd_off(event)
-        elif cmd == 'login':
-            await self._cmd_login(event)
-        elif cmd == 'status':
-            await self._cmd_status(event)
-        elif cmd == 'mode' and args:
-            await self._cmd_mode(event, args[0])
-        elif cmd == 'interval' and args:
-            await self._cmd_interval(event, args[0])
-        elif cmd == 'clear':
-            await self._cmd_clear(event)
-        elif cmd == 'help':
-            await self._cmd_help(event)
-        else:
-            await event.send(event.plain_result("可用命令: bili now, on, off, login, status, mode, interval, clear, help"))
-
+    # ---------- 命令具体实现（生成器形式）----------
     async def _cmd_help(self, event: AstrMessageEvent):
         help_text = (
             "📖 B站随机视频搬运插件使用帮助\n"
@@ -536,70 +538,71 @@ class BiliRandomVideo(Star):
             "• bili help - 显示本帮助\n"
             "关键词触发: 在群内发送“随机视频”、“来点视频”、“B站视频”即可触发推送（有冷却）"
         )
-        await event.send(event.plain_result(help_text))
+        yield event.chain_result([Plain(help_text)])
 
     async def _cmd_now(self, event: AstrMessageEvent):
-        # 获取冷却key：群聊用群ID，私聊用用户ID
         cooldown_key = str(event.message_obj.group_id) if event.message_obj.group_id else event.get_sender_id()
         now = time.time()
         last = self.manual_cooldown.get(cooldown_key, 0)
         if now - last < MANUAL_COOLDOWN_SECONDS:
             remain = int(MANUAL_COOLDOWN_SECONDS - (now - last))
-            await event.send(event.plain_result(f"⏳ 手动调用冷却中，请 {remain} 秒后再试"))
+            yield event.chain_result([Plain(f"⏳ 手动调用冷却中，请 {remain} 秒后再试")])
             return
         self.manual_cooldown[cooldown_key] = now
-        await event.send(event.plain_result("🎬 正在搬石，请稍候..."))
-        await self._push_to_target_group(event)
+        yield event.chain_result([Plain("🎬 正在搬石，请稍候...")])
+        async for _ in self._push_to_target_group(event):
+            pass
 
     async def _cmd_on(self, event: AstrMessageEvent):
         if self.running:
-            await event.send(event.plain_result("定时推送已在运行中"))
+            yield event.chain_result([Plain("定时推送已在运行中")])
             return
         self.running = True
         self.task = asyncio.create_task(self._timer_loop())
-        await event.send(event.plain_result("✅ 已开启定时推送"))
+        yield event.chain_result([Plain("✅ 已开启定时推送")])
 
     async def _cmd_off(self, event: AstrMessageEvent):
         if not self.running:
-            await event.send(event.plain_result("定时推送已关闭"))
+            yield event.chain_result([Plain("定时推送已关闭")])
             return
         self.running = False
         if self.task:
             self.task.cancel()
             self.task = None
-        await event.send(event.plain_result("✅ 已关闭定时推送"))
+        yield event.chain_result([Plain("✅ 已关闭定时推送")])
 
     async def _cmd_login(self, event: AstrMessageEvent):
         sender_id = event.get_sender_id()
         origin = event.unified_msg_origin
 
         if sender_id in self._login_tasks and not self._login_tasks[sender_id].done():
-            await event.send(event.plain_result("⏳ 你有一个正在进行的扫码登录，请先完成或等待超时"))
+            yield event.chain_result([Plain("⏳ 你有一个正在进行的扫码登录，请先完成或等待超时")])
             return
 
-        await event.send(event.plain_result("🔐 正在生成登录二维码..."))
+        yield event.chain_result([Plain("🔐 正在生成登录二维码...")])
 
         try:
             async with self.session.post(BILI_QR_GENERATE_URL, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/'}) as resp:
                 data = await resp.json()
                 if data.get('code') != 0:
-                    await event.send(event.plain_result(f"❌ 获取二维码失败: {data.get('message', '未知错误')}"))
+                    yield event.chain_result([Plain(f"❌ 获取二维码失败: {data.get('message', '未知错误')}")])
                     return
                 qrcode_url = data["data"]["url"]
                 qrcode_key = data["data"]["qrcode_key"]
 
             if not qrcode_key:
-                await event.send(event.plain_result("❌ 获取qrcode_key失败"))
+                yield event.chain_result([Plain("❌ 获取qrcode_key失败")])
                 return
 
             unique_id = f"{sender_id}_{uuid.uuid4().hex[:8]}"
             qr_path = await self._generate_qrcode_image(qrcode_url, unique_id)
             if not qr_path:
-                await event.send(event.plain_result("❌ 二维码生成失败，请检查是否已安装 qrcode 库"))
+                yield event.chain_result([Plain("❌ 二维码生成失败，请检查是否已安装 qrcode 库")])
                 return
 
-            await event.send(event.make_result().file_image(str(qr_path)))
-            await event.send(event.plain_result("🔗 请使用B站手机App扫码登录，有效期3分钟"))
+            # 发送二维码图片
+            yield event.chain_result([Image.fromFileSystem(str(qr_path))])
+            yield event.chain_result([Plain("🔗 请使用B站手机App扫码登录，有效期3分钟")])
 
             task = asyncio.create_task(self._poll_qr_login(sender_id, qrcode_key, qr_path, origin))
             self._login_tasks[sender_id] = task
@@ -607,7 +610,7 @@ class BiliRandomVideo(Star):
 
         except Exception as e:
             logger.exception("扫码登录出错")
-            await event.send(event.plain_result(f"❌ 生成二维码失败: {e}"))
+            yield event.chain_result([Plain(f"❌ 生成二维码失败: {e}")])
 
     async def _cmd_status(self, event: AstrMessageEvent):
         lines = [
@@ -621,7 +624,7 @@ class BiliRandomVideo(Star):
             f"群模式: {'白名单' if self.config.get('use_whitelist_mode', False) else '黑名单'}",
             f"关键词列表: {', '.join(self.config.get('keywords', []))}"
         ]
-        await event.send(event.plain_result("\n".join(lines)))
+        yield event.chain_result([Plain("\n".join(lines))])
 
     async def _cmd_mode(self, event: AstrMessageEvent, mode: str):
         if mode == 'whitelist':
@@ -629,29 +632,28 @@ class BiliRandomVideo(Star):
         elif mode == 'blacklist':
             self.config['use_whitelist_mode'] = False
         else:
-            await event.send(event.plain_result("模式只能是 whitelist 或 blacklist"))
+            yield event.chain_result([Plain("模式只能是 whitelist 或 blacklist")])
             return
         self._save_config()
-        await event.send(event.plain_result(f"✅ 已切换到 {'白名单' if self.config['use_whitelist_mode'] else '黑名单'} 模式"))
+        yield event.chain_result([Plain(f"✅ 已切换到 {'白名单' if self.config['use_whitelist_mode'] else '黑名单'} 模式")])
 
     async def _cmd_interval(self, event: AstrMessageEvent, sec_str: str):
         try:
             sec = max(60, int(sec_str))
             self.config['scan_interval'] = sec
             self._save_config()
-            await event.send(event.plain_result(f"✅ 已设置定时推送间隔为 {sec} 秒"))
+            yield event.chain_result([Plain(f"✅ 已设置定时推送间隔为 {sec} 秒")])
         except ValueError:
-            await event.send(event.plain_result("请输入有效的数字"))
+            yield event.chain_result([Plain("请输入有效的数字")])
 
     async def _cmd_clear(self, event: AstrMessageEvent):
-        """清除当前群的关键词冷却"""
         group_id = str(event.message_obj.group_id) if event.message_obj.group_id else None
         if not group_id:
-            await event.send(event.plain_result("❌ 该命令仅支持群聊"))
+            yield event.chain_result([Plain("❌ 该命令仅支持群聊")])
             return
         if group_id in self.group_cooldown:
             del self.group_cooldown[group_id]
             self._save_json("group_cooldown.json", self.group_cooldown)
-            await event.send(event.plain_result("✅ 已清除本群的关键词冷却"))
+            yield event.chain_result([Plain("✅ 已清除本群的关键词冷却")])
         else:
-            await event.send(event.plain_result("本群当前没有冷却记录"))
+            yield event.chain_result([Plain("本群当前没有冷却记录")])
