@@ -40,14 +40,15 @@
 ### 插件配置文件位于 data/plugins/Astrbot_plugin_bili_Randomvideoshit/_conf_schema.json，可通过 AstrBot WebUI 的“插件配置”界面修改，或直接编辑 JSON 文件。
 
 ### 配置项	类型	默认值	说明
-## auto_start	bool	true	插件启动时自动开启定时推送
-## scan_interval	int	3600	定时推送间隔（秒），最小 60 秒
-## keyword_cooldown_seconds	int	600	关键词触发冷却时间（秒），0 表示无冷却
-## use_whitelist_mode	bool	false	true：白名单模式；false：黑名单模式
-## whitelist_groups	array	[]	白名单群组 ID 列表
-## blacklist_groups	array	[]	黑名单群组 ID 列表
-## keywords	array	["随机视频", "来点视频", "B站视频"]	触发关键词列表
-### 注意：群组 ID 可通过机器人收到的消息日志获取，格式通常为纯数字字符串。
+auto_start	bool	true	插件启动时自动开启定时推送
+scan_interval	int	3600	定时推送间隔（秒），最小 60 秒
+keyword_cooldown_seconds	int	600	关键词触发冷却时间（秒），0 表示无冷却
+use_whitelist_mode	bool	false	true：白名单模式；false：黑名单模式
+whitelist_groups	array	[]	白名单群组 ID 列表
+blacklist_groups	array	[]	黑名单群组 ID 列表
+keywords	array	["随机视频", "来点视频", "B站视频"]	触发关键词列表
+
+注意：群组 ID 可通过机器人收到的消息日志获取，格式通常为纯数字字符串。
 
 # 📝 命令
 ### 所有命令均以 /bili 或 bili 开头，在私聊或群聊中均可使用。
