@@ -27,8 +27,8 @@ QR_POLL_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
 
 # ---------- 扫码登录模块 ----------
 class BiliLogin:
-    """B站扫码登录器"""
-
+    """B站扫码登录器（完整实现）"""
+    
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
         self.headers = {
@@ -36,24 +36,25 @@ class BiliLogin:
             'Referer': 'https://www.bilibili.com/'
         }
 
-    async def generate_qrcode(self) -> tuple:
-        """生成二维码，返回 (qrcode_key, qr_url, qr_image_path)"""
+    async def generate_qrcode(self):
+        """生成二维码，返回 (qrcode_key, qr_path)"""
         try:
-            async with self.session.post(self.QR_GENERATE_URL, headers=self.headers) as resp:
+            async with self.session.post(QR_GENERATE_URL, headers=self.headers) as resp:
                 data = await resp.json()
                 if data.get('code') != 0:
-                    return None, None, None
+                    logger.error(f"生成二维码失败: {data.get('message')}")
+                    return None, None
                 qrcode_key = data['data']['qrcode_key']
                 qr_url = data['data']['url']
-
+                
                 # 生成二维码图片
                 qr = qrcode.make(qr_url)
                 qr_path = DATA_DIR / f"qrcode_{int(time.time())}.png"
                 qr.save(qr_path)
-                return qrcode_key, qr_url, str(qr_path)
+                return qrcode_key, str(qr_path)
         except Exception as e:
-            logger.error(f"生成二维码失败: {e}")
-            return None, None, None
+            logger.error(f"生成二维码异常: {e}")
+            return None, None
 
     async def poll_login(self, qrcode_key: str, timeout: int = 180) -> Optional[str]:
         """轮询扫码结果，返回Cookie字符串或None"""
@@ -61,7 +62,7 @@ class BiliLogin:
         while time.time() - start_time < timeout:
             await asyncio.sleep(3)
             try:
-                async with self.session.get(self.QR_POLL_URL, params={'qrcode_key': qrcode_key}, headers=self.headers) as resp:
+                async with self.session.get(QR_POLL_URL, params={'qrcode_key': qrcode_key}, headers=self.headers) as resp:
                     poll_data = await resp.json()
                     if poll_data.get('code') == 0:
                         # 扫码成功，从响应头提取Cookie
@@ -79,13 +80,38 @@ class BiliLogin:
                             cookie_str = f"SESSDATA={sessdata}; bili_jct={bili_jct}; buvid3={buvid3}"
                             return cookie_str
                     elif poll_data.get('code') == 86038:
-                        # 二维码过期
-                        logger.warning("登录二维码已过期")
+                        logger.warning("二维码已过期")
                         return None
             except Exception as e:
-                logger.error(f"轮询登录状态异常: {e}")
+                logger.error(f"轮询异常: {e}")
                 continue
         return None
+
+    async def login(self, send_callback) -> Optional[str]:
+        """
+        完整的登录流程
+        send_callback: 异步函数，用于发送二维码图片和消息
+        """
+        # 生成二维码
+        qrcode_key, qr_path = await self.generate_qrcode()
+        if not qrcode_key:
+            await send_callback("❌ 生成二维码失败，请稍后再试")
+            return None
+        
+        # 发送二维码图片
+        await send_callback(qr_path)
+        await send_callback("🔗 请使用B站手机App扫码登录，有效期3分钟")
+        
+        # 轮询结果
+        cookie = await self.poll_login(qrcode_key)
+        
+        # 清理二维码文件
+        try:
+            Path(qr_path).unlink()
+        except:
+            pass
+        
+        return cookie
 
 # ---------- WBI签名助手 ----------
 class WbiHelper:
@@ -131,7 +157,7 @@ def normalize_title(title: str) -> str:
 
 # ---------- 主插件类 ----------
 @register("astrbot_plugin_bili_Randomvideoshit", "Rasutohda",
-          "B站随机视频搬运｜扫码登录｜关键词触发｜定时推送", "3.0.5",
+          "B站随机视频搬运｜扫码登录｜关键词触发｜定时推送", "3.0.6",
           "https://github.com/Rasutohda/astrbot_plugin_bili_Randomvideoshit")
 class BiliRandomVideo(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -194,9 +220,14 @@ class BiliRandomVideo(Star):
 
     # ---------- 核心视频获取 ----------
     async def _fetch_random_video(self) -> Optional[dict]:
+        # 如果没有Cookie，尝试匿名访问（可能受限）
         params = {"series_id": 0}
         data = await self._fetch_json("https://api.bilibili.com/x/web-interface/popular/series/one", params, need_sign=True)
         video_list = data.get('data', {}).get('list', []) if data else []
+        if not video_list:
+            # 降级使用全站热门接口
+            data = await self._fetch_json("https://api.bilibili.com/x/web-interface/popular", {"pn": 1, "ps": 30}, need_sign=True)
+            video_list = data.get('data', {}).get('list', []) if data else []
         if not video_list:
             return None
         for _ in range(10):
@@ -231,13 +262,13 @@ class BiliRandomVideo(Star):
                 img_key, sub_key = await WbiHelper.get_keys(self.session)
                 params = WbiHelper.sign(params, img_key, sub_key)
             except Exception as e:
-                logger.error(f"WBI签名失败: {e}")
-                return None
+                logger.warning(f"WBI签名失败: {e}，尝试无签名请求")
         headers = {
             'User-Agent': 'Mozilla/5.0',
             'Referer': 'https://www.bilibili.com/',
-            'Cookie': self.cookie
         }
+        if self.cookie:
+            headers['Cookie'] = self.cookie
         try:
             async with self.session.get(url, headers=headers, params=params) as resp:
                 data = await resp.json()
@@ -262,19 +293,11 @@ class BiliRandomVideo(Star):
         return chain
 
     async def _send_video(self, target, video: dict, is_command: bool = False):
-        """智能发送视频，兼容event和umo
-        Args:
-            target: AstrMessageEvent 对象 或 unified_msg_origin 字符串
-            video: 视频信息字典
-            is_command: 是否为命令触发（影响日志输出）
-        """
         chain = self._build_message_chain(video)
         try:
             if isinstance(target, AstrMessageEvent):
-                # 命令触发：回复到当前会话
                 await target.send(target.make_result().message(chain))
             else:
-                # 定时任务：使用存储的umo发送
                 await self.context.send_message(target, chain)
             return True
         except Exception as e:
@@ -282,13 +305,11 @@ class BiliRandomVideo(Star):
             return False
 
     async def _push_to_target_group(self, group_id: str, umo: str, event: AstrMessageEvent = None) -> bool:
-        """推送给指定群，event存在时回复到当前会话"""
         video = await self._fetch_random_video()
         if not video:
             if event:
                 await event.send(event.plain_result("❌ 没找到合适的视频，换个时间再试吧~"))
             return False
-        # 发送视频
         success = await self._send_video(event if event else umo, video, is_command=bool(event))
         if success:
             self.sent_titles[normalize_title(video['title'])] = {'sent_at': datetime.now().isoformat()}
@@ -297,7 +318,6 @@ class BiliRandomVideo(Star):
         return success
 
     async def _push_to_all_allowed_groups(self):
-        """定时推送：向所有允许的群发送视频"""
         video = await self._fetch_random_video()
         if not video:
             logger.warning("定时推送未找到视频")
@@ -328,14 +348,13 @@ class BiliRandomVideo(Star):
 
     # ---------- 自动记录群 ----------
     async def _record_group(self, group_id: str, umo: str):
-        """记录群组信息"""
         if group_id not in self.bound_groups:
             self.bound_groups[group_id] = umo
             self._save_json("bound_groups.json", self.bound_groups)
             logger.info(f"📌 自动记录新群: {group_id}")
 
-    # ---------- 关键词触发 ----------
-    @filter.command("bili")  # 使用command装饰器监听以"bili"开头的消息
+    # ---------- 统一命令入口 ----------
+    @filter.command("bili")
     async def on_bili_command(self, event: AstrMessageEvent):
         """智能处理以 'bili' 开头的命令"""
         msg_text = event.message_str.strip()
@@ -345,23 +364,34 @@ class BiliRandomVideo(Star):
         group_id = str(event.message_obj.group_id) if event.message_obj.group_id else "0"
         await self._record_group(group_id, event.unified_msg_origin)
 
-        # 解析命令
-        if msg_text == "bili now":
+        # 解析命令（支持 /bili 和 bili 两种格式）
+        # 去掉开头的 / 符号
+        if msg_text.startswith('/'):
+            msg_text = msg_text[1:]
+        parts = msg_text.split()
+        if not parts:
+            return
+        cmd = parts[0].lower()
+        
+        if cmd == "now":
             await self.cmd_now(event)
-        elif msg_text == "bili on":
+        elif cmd == "on":
             await self.cmd_on(event)
-        elif msg_text == "bili off":
+        elif cmd == "off":
             await self.cmd_off(event)
-        elif msg_text == "bili login":
+        elif cmd == "login":
             await self.cmd_login(event)
-        elif msg_text == "bili status":
+        elif cmd == "status":
             await self.cmd_status(event)
-        elif msg_text == "bili mode":
+        elif cmd == "mode" and len(parts) > 1:
+            # 提取模式参数
+            event.message_str = f"bili mode {parts[1]}"  # 临时设置以供cmd_mode解析
             await self.cmd_mode(event)
-        elif msg_text.startswith("bili interval"):
+        elif cmd == "interval" and len(parts) > 1:
+            event.message_str = f"bili interval {parts[1]}"
             await self.cmd_interval(event)
-        # 关键词模式：如果消息中不包含上述完整命令，但包含配置中的关键词，则触发推送
         else:
+            # 关键词模式：如果消息中包含配置的关键词，则触发推送
             keywords = self.config.get('keywords', ["随机视频", "来点视频", "B站视频"])
             if any(kw in msg_text for kw in keywords):
                 now = time.time()
@@ -411,18 +441,30 @@ class BiliRandomVideo(Star):
 
     async def cmd_login(self, event: AstrMessageEvent):
         await event.send(event.plain_result("🔐 正在生成登录二维码..."))
+        
         async def send_callback(data):
-            if isinstance(data, str) and data.endswith('.png'):
+            if isinstance(data, str) and data.endswith('.png') and Path(data).exists():
+                # 发送图片
                 await event.send(event.make_result().file_image(data))
             else:
                 await event.send(event.plain_result(data))
-        cookie = await self.bili_login.login(event_callback=send_callback)
-        if cookie:
-            self.cookie = cookie
-            self._save_cookie(cookie)
-            await event.send(event.plain_result("✅ 登录成功！Cookie已保存"))
-        else:
-            await event.send(event.plain_result("❌ 登录失败或超时，请重新执行 /bili login"))
+        
+        try:
+            cookie = await self.bili_login.login(send_callback)
+            if cookie:
+                self.cookie = cookie
+                self._save_cookie(cookie)
+                await event.send(event.plain_result("✅ 登录成功！Cookie已保存"))
+                # 重新初始化session以携带新的cookie
+                if self.session:
+                    await self.session.close()
+                self.session = aiohttp.ClientSession()
+                self.bili_login = BiliLogin(self.session)
+            else:
+                await event.send(event.plain_result("❌ 登录失败或超时，请重新执行 bili login"))
+        except Exception as e:
+            logger.error(f"登录异常: {e}")
+            await event.send(event.plain_result(f"❌ 登录失败: {str(e)}"))
 
     async def cmd_status(self, event: AstrMessageEvent):
         status_lines = [
@@ -469,31 +511,7 @@ class BiliRandomVideo(Star):
         except:
             await event.send(event.plain_result("请输入有效的数字"))
 
-    # 兼容旧命令（非 bili 开头）
-    @filter.command("bili now")
-    async def legacy_cmd_now(self, event: AstrMessageEvent):
-        await self.cmd_now(event)
-
-    @filter.command("bili on")
-    async def legacy_cmd_on(self, event: AstrMessageEvent):
-        await self.cmd_on(event)
-
-    @filter.command("bili off")
-    async def legacy_cmd_off(self, event: AstrMessageEvent):
-        await self.cmd_off(event)
-
-    @filter.command("bili login")
-    async def legacy_cmd_login(self, event: AstrMessageEvent):
-        await self.cmd_login(event)
-
-    @filter.command("bili status")
-    async def legacy_cmd_status(self, event: AstrMessageEvent):
-        await self.cmd_status(event)
-
-    @filter.command("bili mode")
-    async def legacy_cmd_mode(self, event: AstrMessageEvent):
-        await self.cmd_mode(event)
-
-    @filter.command("bili interval")
-    async def legacy_cmd_interval(self, event: AstrMessageEvent):
-        await self.cmd_interval(event)
+    # 兼容旧命令（以 / 开头）
+    @filter.command("/bili")
+    async def legacy_bili_command(self, event: AstrMessageEvent):
+        await self.on_bili_command(event)
