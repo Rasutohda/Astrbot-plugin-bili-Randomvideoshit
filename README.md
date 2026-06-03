@@ -1,4 +1,3 @@
-markdown
 # AstrBot 插件 - B站随机视频搬运
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-v4.25.1+-blue)](https://github.com/Soulter/AstrBot)
