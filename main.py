@@ -10,8 +10,8 @@ from astrbot.api.message_components import Plain, At, Image
 
 @register("Astrbot_plugin_bili_Randomvideoshit", "Rasutohda",
           "有人@机器人时随机从B站搬运一个视频（支持分区、切换发送形式、敏感词过滤）", "2.0.1",
-          "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit",
-          priority=0)
+          "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit")
+# 已移除 priority=0，该参数不被 register 支持
 class BiliRandomVideo(Star):
     def __init__(self, context: Context):
         super().__init__(context)
