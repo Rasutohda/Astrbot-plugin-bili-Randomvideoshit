@@ -13,7 +13,7 @@ from datetime import datetime
 import qrcode
 
 from astrbot.api.star import Context, Star, register
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter, AstrMessageEvent, EventMessageType
 from astrbot.api import logger
 from astrbot.api.message_components import Plain, Image
 
@@ -29,7 +29,6 @@ QR_POLL_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
 class WbiHelper:
     @staticmethod
     async def get_keys(session: aiohttp.ClientSession) -> tuple:
-        """从B站导航页获取最新的 img_key 和 sub_key"""
         async with session.get('https://api.bilibili.com/x/web-interface/nav',
                                headers=WbiHelper._headers()) as resp:
             data = await resp.json()
@@ -43,7 +42,6 @@ class WbiHelper:
 
     @staticmethod
     def sign(params: dict, img_key: str, sub_key: str) -> dict:
-        """为请求参数添加 w_rid 和 wts 签名"""
         mixin_key = img_key + sub_key
         sorted_params = sorted(params.items())
         query = '&'.join([f"{k}={v}" for k, v in sorted_params])
@@ -60,7 +58,6 @@ class WbiHelper:
 
 # ---------- 辅助函数 ----------
 def format_number(num: int) -> str:
-    """格式化数字为万/亿"""
     if num >= 1_0000_0000:
         return f"{num/1_0000_0000:.1f}亿"
     elif num >= 1_0000:
@@ -68,26 +65,24 @@ def format_number(num: int) -> str:
     return str(num)
 
 def normalize_title(title: str) -> str:
-    """规范化标题用于去重"""
     return re.sub(r'\s+', ' ', title).strip().lower()
 
 # ---------- 主插件类 ----------
-@register("astrbotplugin_bili_randomvideoshit", "Rasutohda",
-          "B站随机视频搬运｜扫码登录｜关键词触发｜定时推送", "3.0.0",
-          "https://github.com/Rasutohda/astrbotplugin_bili_randomvideoshit")
+@register("astrbot_plugin_bili_Randomvideoshit", "Rasutohda",
+          "B站随机视频搬运｜扫码登录｜关键词触发｜定时推送", "3.0.1",
+          "https://github.com/Rasutohda/astrbot_plugin_bili_Randomvideoshit")
 class BiliRandomVideo(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         self.config = config or {}
-        self.running = False          # 定时任务运行标志
-        self.task = None              # 定时任务句柄
-        self.session = None           # aiohttp会话
+        self.running = False
+        self.task = None
+        self.session = None
         self.cookie = self._load_cookie()
-        self.bound_groups: Dict[str, str] = self._load_json("bound_groups.json", {})   # group_id -> umo
-        self.sent_titles: Dict[str, dict] = self._load_json("sent_titles.json", {})    # 已发送标题
-        self.group_cooldown: Dict[str, float] = self._load_json("group_cooldown.json", {})  # 关键词冷却
-
-        self.manual_cooldown = 60      # 手动触发冷却秒数
+        self.bound_groups: Dict[str, str] = self._load_json("bound_groups.json", {})
+        self.sent_titles: Dict[str, dict] = self._load_json("sent_titles.json", {})
+        self.group_cooldown: Dict[str, float] = self._load_json("group_cooldown.json", {})
+        self.manual_cooldown = 60
         self.last_manual_time = 0.0
 
     # ---------- 持久化 ----------
@@ -112,7 +107,6 @@ class BiliRandomVideo(Star):
 
     # ---------- 初始化/卸载 ----------
     async def initialize(self):
-        """插件被加载时调用"""
         self.session = aiohttp.ClientSession()
         if self.config.get('auto_start', True):
             self.running = True
@@ -120,7 +114,6 @@ class BiliRandomVideo(Star):
             logger.info("✅ B站随机视频搬运：定时任务已启动")
 
     async def terminate(self):
-        """插件被卸载时调用"""
         self.running = False
         if self.task:
             self.task.cancel()
@@ -137,13 +130,11 @@ class BiliRandomVideo(Star):
 
     # ---------- 核心视频获取 ----------
     async def _fetch_random_video(self) -> Optional[dict]:
-        """从B站热门榜单随机获取一个未发送过的视频"""
         params = {"series_id": 0}
         data = await self._fetch_json("https://api.bilibili.com/x/web-interface/popular/series/one", params, need_sign=True)
         video_list = data.get('data', {}).get('list', []) if data else []
         if not video_list:
             return None
-        # 随机抽取，最多尝试10次
         for _ in range(10):
             video = random.choice(video_list)
             title = video.get('title', '')
@@ -151,7 +142,6 @@ class BiliRandomVideo(Star):
                 continue
             if normalize_title(title) in self.sent_titles:
                 continue
-            # 获取详细信息
             detail = await self._fetch_json("https://api.bilibili.com/x/web-interface/view",
                                             {"bvid": video['bvid']}, need_sign=True)
             if not detail:
@@ -172,7 +162,6 @@ class BiliRandomVideo(Star):
         return None
 
     async def _fetch_json(self, url: str, params: dict, need_sign: bool = False) -> Optional[dict]:
-        """带Cookie和可选WBI签名的API请求"""
         if need_sign:
             try:
                 img_key, sub_key = await WbiHelper.get_keys(self.session)
@@ -198,7 +187,6 @@ class BiliRandomVideo(Star):
 
     # ---------- 消息构建与发送 ----------
     def _build_message_chain(self, video: dict) -> list:
-        """构建图文消息链"""
         text = (
             f"🎬 {video['title']}\n"
             f"👤 {video['author']}\n"
@@ -210,7 +198,6 @@ class BiliRandomVideo(Star):
         return chain
 
     async def _send_to_target(self, target_umo: str, video: dict) -> bool:
-        """发送到指定目标（群或个人）"""
         try:
             chain = self._build_message_chain(video)
             await self.context.send_message(target_umo, chain)
@@ -220,7 +207,6 @@ class BiliRandomVideo(Star):
             return False
 
     async def _push_to_target_group(self, group_id: str, umo: str, event: AstrMessageEvent = None) -> bool:
-        """向指定群推送视频，成功后记录标题去重"""
         video = await self._fetch_random_video()
         if not video:
             if event:
@@ -234,7 +220,6 @@ class BiliRandomVideo(Star):
         return success
 
     async def _push_to_all_allowed_groups(self):
-        """定时推送：向所有允许的群发送同一视频（避免重复请求）"""
         video = await self._fetch_random_video()
         if not video:
             logger.warning("定时推送未找到视频")
@@ -244,7 +229,7 @@ class BiliRandomVideo(Star):
             if self._is_allowed(gid):
                 if await self._send_to_target(umo, video):
                     success_count += 1
-                await asyncio.sleep(1)  # 避免刷屏
+                await asyncio.sleep(1)
         if success_count > 0:
             self.sent_titles[normalize_title(video['title'])] = {'sent_at': datetime.now().isoformat()}
             self._save_json("sent_titles.json", self.sent_titles)
@@ -259,8 +244,8 @@ class BiliRandomVideo(Star):
             return group_id in whitelist
         return group_id not in blacklist
 
-    # ---------- 自动记录群 ----------
-    @filter.event_message_type("group_message")
+    # ---------- 自动记录群和关键词触发 ----------
+    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent):
         group_id = str(event.message_obj.group_id)
         # 自动记录群
@@ -269,21 +254,19 @@ class BiliRandomVideo(Star):
             self._save_json("bound_groups.json", self.bound_groups)
             logger.info(f"📌 自动记录新群: {group_id}")
 
-        # 关键词触发逻辑
+        # 关键词触发
         keywords = self.config.get('keywords', ["随机视频", "来点视频", "B站视频"])
         if not keywords:
             return
         msg_text = event.message_str.strip()
         if not any(kw in msg_text for kw in keywords):
             return
-        # 冷却检查
         now = time.time()
         cooldown_sec = self.config.get('keyword_cooldown_seconds', 600)
         last = self.group_cooldown.get(group_id, 0)
         if now - last < cooldown_sec:
             logger.debug(f"群 {group_id} 关键词触发冷却中")
             return
-        # 触发推送
         logger.info(f"群 {group_id} 触发关键词，开始推送")
         await event.send(event.plain_result("🎬 检测到关键词，正在搬运视频..."))
         success = await self._push_to_target_group(group_id, event.unified_msg_origin, event)
@@ -296,7 +279,6 @@ class BiliRandomVideo(Star):
     # ---------- 命令 ----------
     @filter.command("bili now")
     async def cmd_now(self, event: AstrMessageEvent):
-        """立即推送一条视频到当前群"""
         now = time.time()
         if now - self.last_manual_time < self.manual_cooldown:
             remain = int(self.manual_cooldown - (now - self.last_manual_time))
@@ -311,7 +293,6 @@ class BiliRandomVideo(Star):
 
     @filter.command("bili on")
     async def cmd_on(self, event: AstrMessageEvent):
-        """开启定时自动推送"""
         if self.running:
             yield event.plain_result("定时推送已在运行中")
             return
@@ -321,7 +302,6 @@ class BiliRandomVideo(Star):
 
     @filter.command("bili off")
     async def cmd_off(self, event: AstrMessageEvent):
-        """关闭定时自动推送"""
         if not self.running:
             yield event.plain_result("定时推送已关闭")
             return
@@ -333,8 +313,6 @@ class BiliRandomVideo(Star):
 
     @filter.command("bili login")
     async def cmd_login(self, event: AstrMessageEvent):
-        """扫码登录B站，自动保存Cookie"""
-        # 获取二维码
         async with self.session.post(QR_GENERATE_URL, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/'}) as resp:
             data = await resp.json()
             if data.get('code') != 0:
@@ -342,20 +320,16 @@ class BiliRandomVideo(Star):
                 return
             qrcode_key = data['data']['qrcode_key']
             qr_url = data['data']['url']
-        # 生成二维码图片
         qr = qrcode.make(qr_url)
         qr_path = DATA_DIR / f"qrcode_{int(time.time())}.png"
         qr.save(qr_path)
-        # 发送二维码（注意：AstrBot的file_image需要文件路径字符串）
         await event.send(event.make_result().file_image(str(qr_path)))
         await event.send(event.plain_result("🔗 请使用B站手机App扫码登录，有效期3分钟"))
-        # 轮询结果
-        for _ in range(60):  # 3分钟 / 3秒 = 60次
+        for _ in range(60):
             await asyncio.sleep(3)
             async with self.session.get(QR_POLL_URL, params={'qrcode_key': qrcode_key}, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/'}) as resp:
                 poll_data = await resp.json()
                 if poll_data.get('code') == 0:
-                    # 从响应头中提取Cookie
                     cookie_dict = {}
                     set_cookie_headers = resp.headers.getall('Set-Cookie', [])
                     for header in set_cookie_headers:
@@ -377,7 +351,6 @@ class BiliRandomVideo(Star):
                     break
         else:
             yield event.plain_result("⏱️ 扫码超时，请重新执行 /bili login")
-        # 清理临时二维码文件
         try:
             qr_path.unlink()
         except:
@@ -385,7 +358,6 @@ class BiliRandomVideo(Star):
 
     @filter.command("bili status")
     async def cmd_status(self, event: AstrMessageEvent):
-        """查看插件运行状态"""
         status_lines = [
             "=== B站随机视频搬运状态 ===",
             f"定时任务: {'✅ 运行中' if self.running else '❌ 已停止'}",
@@ -401,7 +373,6 @@ class BiliRandomVideo(Star):
 
     @filter.command("bili mode")
     async def cmd_mode(self, event: AstrMessageEvent):
-        """切换群推送模式: /bili mode whitelist 或 /bili mode blacklist"""
         parts = event.message_str.strip().split()
         if len(parts) < 3:
             yield event.plain_result("用法: /bili mode <whitelist|blacklist>")
@@ -420,7 +391,6 @@ class BiliRandomVideo(Star):
 
     @filter.command("bili interval")
     async def cmd_interval(self, event: AstrMessageEvent):
-        """设置定时推送间隔（秒）: /bili interval 3600"""
         parts = event.message_str.strip().split()
         if len(parts) < 3:
             yield event.plain_result("用法: /bili interval <秒数>")
