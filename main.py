@@ -13,7 +13,7 @@ from datetime import datetime
 import qrcode
 
 from astrbot.api.star import Context, Star, register
-from astrbot.api.event import filter, AstrMessageEvent, EventMessageType
+from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api import logger
 from astrbot.api.message_components import Plain, Image
 
@@ -69,7 +69,7 @@ def normalize_title(title: str) -> str:
 
 # ---------- 主插件类 ----------
 @register("astrbot_plugin_bili_Randomvideoshit", "Rasutohda",
-          "B站随机视频搬运｜扫码登录｜关键词触发｜定时推送", "3.0.1",
+          "B站随机视频搬运｜扫码登录｜关键词触发｜定时推送", "3.0.2",
           "https://github.com/Rasutohda/astrbot_plugin_bili_Randomvideoshit")
 class BiliRandomVideo(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -245,7 +245,7 @@ class BiliRandomVideo(Star):
         return group_id not in blacklist
 
     # ---------- 自动记录群和关键词触发 ----------
-    @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
+    @filter.event_message_type("group_message")
     async def on_group_message(self, event: AstrMessageEvent):
         group_id = str(event.message_obj.group_id)
         # 自动记录群
