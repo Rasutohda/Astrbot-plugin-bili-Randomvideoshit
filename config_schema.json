@@ -1,30 +1,8 @@
 {
-    "region": {
-        "description": "视频分区",
-        "type": "string",
-        "hint": "可填写分区名称（如：动画、游戏）或数字ID（如：1、4）。留空则获取全站随机视频。",
-        "default": ""
-    },
-    "send_type": {
-        "description": "发送形式",
-        "type": "string",
-        "options": ["link", "image"],
-        "hint": "link: 纯文本链接。image: 发送视频封面图+文本。",
-        "default": "link"
-    },
-    "block_keywords": {
-        "description": "敏感词过滤列表",
-        "type": "list",
-        "items": {
-            "type": "string"
-        },
-        "hint": "视频标题或UP主名称中包含任一敏感词时将被过滤。支持中英文，不区分大小写。",
-        "default": []
-    },
-    "show_processing": {
-        "description": "显示「正在搬运」提示",
-        "type": "boolean",
-        "hint": "是否在获取视频前发送提示消息。发送提示可能会增加消息条数。",
-        "default": false
-    }
+    "keywords": ["随机视频", "来点视频", "随机B站", "来一个视频"],
+    "send_type": "image",
+    "show_processing": true,
+    "max_retries": 3,
+    "hot_series_id": 0,
+    "max_video_age_days": 7
 }
