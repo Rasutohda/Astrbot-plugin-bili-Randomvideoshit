@@ -2,14 +2,14 @@ import random
 import asyncio
 import httpx
 import traceback
-from typing import Optional, Dict, Any, List, AsyncGenerator, Union
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from typing import Optional, Dict, Any, List
+from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.api.message_components import Plain, At, Image
 
 @register("Astrbot_plugin_bili_Randomvideoshit", "Rasutohda",
-          "有人@机器人时随机从B站搬运一个视频（支持分区、切换发送形式、敏感词过滤）", "2.0.0",
+          "有人@机器人时随机从B站搬运一个视频（支持分区、切换发送形式、敏感词过滤）", "2.0.1",
           "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit",
           priority=0)
 class BiliRandomVideo(Star):
@@ -20,24 +20,21 @@ class BiliRandomVideo(Star):
         self.send_type = "link"
         self.history_ids: List[str] = []
         self.bot_id = None
-        self.block_keywords: List[str] = []      # 敏感词列表（标题/UP主）
-        self.show_processing = False              # 是否显示“正在搬运”提示
-        self.max_retries = 5                      # 最大重试次数（去重/敏感词过滤）
+        self.block_keywords: List[str] = []
+        self.show_processing = False
+        self.max_retries = 5
         self._init_bot_id()
         self.load_config()
 
     def _init_bot_id(self):
         """尝试多种方式获取机器人自身ID"""
         try:
-            # 方式1：context提供的方法
             if hasattr(self.context, 'get_bot_id'):
                 self.bot_id = str(self.context.get_bot_id())
                 logger.info(f"通过 get_bot_id 获取 bot_id: {self.bot_id}")
-            # 方式2：get_bot_self_id
             if not self.bot_id and hasattr(self.context, 'get_bot_self_id'):
                 self.bot_id = str(self.context.get_bot_self_id())
                 logger.info(f"通过 get_bot_self_id 获取 bot_id: {self.bot_id}")
-            # 方式3：从配置读取 bot_qq
             if not self.bot_id:
                 config = self.context.get_config()
                 if config and 'bot_qq' in config:
@@ -143,7 +140,6 @@ class BiliRandomVideo(Star):
         if self.region_id is None:
             return None
         
-        # 第一步：获取分区第一页，得到总页数
         first_page_url = "https://api.bilibili.com/x/web-interface/dynamic/region"
         params = {"rid": self.region_id, "pn": 1, "ps": 30}
         data = await self._fetch_json(first_page_url, params)
@@ -152,10 +148,9 @@ class BiliRandomVideo(Star):
         
         page_info = data.get("data", {}).get("page", {})
         total_pages = page_info.get("pages", 1)
-        if total_pages > 50:        # B站限制最多50页
+        if total_pages > 50:
             total_pages = 50
         
-        # 随机选择一页（1 ~ total_pages）
         random_page = random.randint(1, max(1, total_pages))
         params["pn"] = random_page
         data = await self._fetch_json(first_page_url, params)
@@ -172,7 +167,6 @@ class BiliRandomVideo(Star):
 
     async def get_random_video_from_all(self) -> Optional[Dict[str, Any]]:
         """从全站最新视频中随机获取（随机翻页）"""
-        # 使用 archive/index 接口，最多可翻到第100页（每页30个）
         max_page = 100
         random_page = random.randint(1, max_page)
         url = "https://api.bilibili.com/x/web-interface/archive/index"
@@ -183,7 +177,6 @@ class BiliRandomVideo(Star):
         
         archives = data.get("data", [])
         if not archives:
-            # 如果该页无数据（可能超出实际页数），降级到第1页
             params["pn"] = 1
             data = await self._fetch_json(url, params)
             if not data:
@@ -208,12 +201,10 @@ class BiliRandomVideo(Star):
                 await asyncio.sleep(0.5)
                 continue
             
-            # 去重检查
             if video["bvid"] in self.history_ids:
                 logger.info(f"重复视频 {video['bvid']}，重新获取")
                 continue
             
-            # 敏感词过滤（标题或UP主包含敏感词）
             if self.block_keywords:
                 title_lower = video["title"].lower()
                 owner_lower = video["owner"].lower()
@@ -222,7 +213,6 @@ class BiliRandomVideo(Star):
                     logger.info(f"视频命中敏感词，跳过: {video['title']}")
                     continue
             
-            # 通过所有检查
             self.history_ids.append(video["bvid"])
             if len(self.history_ids) > 50:
                 self.history_ids.pop(0)
@@ -231,8 +221,9 @@ class BiliRandomVideo(Star):
         logger.error("达到最大重试次数，未能获取有效视频")
         return None
 
-    # ------------------- 发送消息 -------------------
-    async def send_video_as_link(self, event: AstrMessageEvent, video_info: Dict[str, Any]) -> AsyncGenerator[MessageEventResult, None]:
+    # ------------------- 发送回复（使用 event.reply） -------------------
+    async def send_video_reply(self, event: AstrMessageEvent, video_info: Dict[str, Any]):
+        """根据配置发送视频消息（使用event.reply）"""
         stats = video_info.get("stat", {})
         play_count = stats.get("view", "N/A")
         like_count = stats.get("like", "N/A")
@@ -241,52 +232,35 @@ class BiliRandomVideo(Star):
                 f"👤 UP主：{video_info['owner']}\n"
                 f"🎉 播放量：{play_count} | 👍 点赞：{like_count}\n"
                 f"🔗 链接：{video_info['url']}")
-        yield event.plain_result(text)
-        logger.info(f"已发送视频(链接形式): {video_info['title']}")
-
-    async def send_video_as_image(self, event: AstrMessageEvent, video_info: Dict[str, Any]) -> AsyncGenerator[MessageEventResult, None]:
-        stats = video_info.get("stat", {})
-        play_count = stats.get("view", "N/A")
-        like_count = stats.get("like", "N/A")
-        text = (f"🎬 随机搬运一个B站视频\n"
-                f"📺 标题：{video_info['title']}\n"
-                f"👤 UP主：{video_info['owner']}\n"
-                f"🎉 播放量：{play_count} | 👍 点赞：{like_count}\n"
-                f"🔗 链接：{video_info['url']}")
-        pic_url = video_info.get("pic")
-        if pic_url:
+        
+        if self.send_type == "image" and video_info.get("pic"):
             try:
-                yield event.chain_result([Image.fromURL(pic_url), Plain(f"\n{text}")])
+                await event.reply(Image.fromURL(video_info["pic"]))
+                await event.reply(Plain(text))
                 logger.info(f"已发送视频(图片形式): {video_info['title']}")
                 return
             except Exception as e:
                 logger.error(f"发送封面图片失败: {e}，降级为链接")
-        yield event.plain_result(text)
+        await event.reply(Plain(text))
+        logger.info(f"已发送视频(链接形式): {video_info['title']}")
 
-    # ------------------- 核心业务逻辑 -------------------
-    async def handle_at_message(self, event: AstrMessageEvent) -> AsyncGenerator[MessageEventResult, None]:
+    async def handle_at_message(self, event: AstrMessageEvent):
         """处理@机器人的消息，产出视频回复"""
         logger.info("开始处理@消息")
         try:
-            # 可选：显示处理中提示
             if self.show_processing:
-                yield event.plain_result("🎥 正在随机搬运B站视频，请稍候...")
+                await event.reply("🎥 正在随机搬运B站视频，请稍候...")
 
             video_info = await self.get_random_video()
             if not video_info:
-                yield event.plain_result("❌ 获取视频失败，请稍后再试")
+                await event.reply("❌ 获取视频失败，请稍后再试")
                 return
 
-            if self.send_type == "image":
-                async for result in self.send_video_as_image(event, video_info):
-                    yield result
-            else:
-                async for result in self.send_video_as_link(event, video_info):
-                    yield result
+            await self.send_video_reply(event, video_info)
 
         except Exception as e:
             logger.error(f"处理@消息异常: {e}\n{traceback.format_exc()}")
-            yield event.plain_result(f"❌ 处理出错: {str(e)}")
+            await event.reply(f"❌ 处理出错: {str(e)}")
 
     # ------------------- 指令：重载配置 -------------------
     @filter(commands=["/bili reload"])
@@ -301,18 +275,15 @@ class BiliRandomVideo(Star):
 
     # ------------------- 全局过滤器（核心拦截） -------------------
     @filter
-    async def message_filter(self, event: AstrMessageEvent) -> Union[bool, AsyncGenerator[MessageEventResult, None]]:
+    async def message_filter(self, event: AstrMessageEvent) -> bool:
         """检测是否@机器人，若是则处理并阻止其他插件继续处理"""
         logger.debug(f"[Filter] 收到消息: {event.message_str}")
         
-        # 检测是否被@
         is_at_me = await self._is_at_bot(event)
         
         if is_at_me:
             logger.info("[Filter] 检测到@机器人，开始处理并阻止其他插件")
-            # 产出回复
-            async for result in self.handle_at_message(event):
-                yield result
+            await self.handle_at_message(event)
             # 返回 False 表示不继续传递给其他插件
             return False
         else:
@@ -321,7 +292,7 @@ class BiliRandomVideo(Star):
     
     async def _is_at_bot(self, event: AstrMessageEvent) -> bool:
         """跨平台检测是否@了本机器人"""
-        # 优先使用框架内置方法（若存在）
+        # 优先使用框架内置方法
         if hasattr(event, 'is_at_me'):
             try:
                 return event.is_at_me()
@@ -333,7 +304,6 @@ class BiliRandomVideo(Star):
                 if self.bot_id:
                     return any(str(uid) == self.bot_id for uid in at_list)
                 else:
-                    # 无bot_id时，只要有人@就认为是@机器人（宽松模式）
                     return len(at_list) > 0
             except:
                 pass
@@ -343,7 +313,6 @@ class BiliRandomVideo(Star):
         for seg in message_chain:
             if isinstance(seg, At):
                 target = None
-                # 提取target的多种可能属性
                 if hasattr(seg, 'data') and seg.data:
                     target = seg.data.get("qq") or seg.data.get("user_id") or seg.data.get("target")
                 if not target and hasattr(seg, 'qq'):
@@ -353,7 +322,6 @@ class BiliRandomVideo(Star):
                 if not target and hasattr(seg, 'target'):
                     target = seg.target
                 if not target:
-                    # 直接转字符串
                     target = str(seg)
                 
                 if target:
@@ -361,7 +329,6 @@ class BiliRandomVideo(Star):
                     if self.bot_id and target_str == self.bot_id:
                         return True
                     elif not self.bot_id:
-                        # 无bot_id，且target不是'all'之类的，视为@机器人
                         if target_str.lower() != "all":
                             logger.warning(f"无bot_id，但检测到At目标 {target_str}，视为@机器人")
                             return True
