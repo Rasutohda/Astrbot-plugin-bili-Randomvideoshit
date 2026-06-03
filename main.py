@@ -9,9 +9,9 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.api.message_components import Video, Plain, At, Image
 
-@register("astrbot_plugin_bili_random_video", "your_name",
+@register("Astrbot-plugin-bili-Randomvideoshit", "your_name",
           "有人@机器人时随机从B站搬运一个视频（支持自定义分区）", "1.1.0",
-          "https://github.com/your_username/astrbot_plugin_bili_random_video")
+          "https://github.com/your_username/Astrbot-plugin-bili-Randomvideoshit")
 class BiliRandomVideo(Star):
     def __init__(self, context: Context):
         super().__init__(context)
