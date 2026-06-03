@@ -14,9 +14,16 @@ from astrbot.api.message_components import Plain, Image
 
 logger = logging.getLogger(__name__)
 
-# ---------- 辅助函数：WBI 签名（动态获取密钥）----------
+# ---------- WBI 签名混排映射表 ----------
+MIXIN_KEY_ENC_TAB = [
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
+    27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
+    37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
+    22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52
+]
+
 async def get_wbi_keys(session: aiohttp.ClientSession) -> tuple:
-    """从B站导航接口获取 img_key 和 sub_key"""
+    """获取 img_key 和 sub_key（原始字符串）"""
     url = 'https://api.bilibili.com/x/web-interface/nav'
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -25,26 +32,33 @@ async def get_wbi_keys(session: aiohttp.ClientSession) -> tuple:
     async with session.get(url, headers=headers) as resp:
         data = await resp.json()
         if data.get('code') != 0:
-            raise Exception("获取 wbi 密钥失败")
+            raise Exception(f"获取 wbi 密钥失败，状态码：{data.get('code')}")
         wbi_img = data['data']['wbi_img']
         img_url = wbi_img['img_url']
         sub_url = wbi_img['sub_url']
+        # 提取文件名中的 key
         img_key = re.search(r'/([^/]+)\.png', img_url).group(1)
         sub_key = re.search(r'/([^/]+)\.png', sub_url).group(1)
         return img_key, sub_key
 
+def get_mixin_key(orig: str) -> str:
+    """对 img_key + sub_key 拼接后的字符串进行重排，取前 32 位作为最终密钥"""
+    return ''.join([orig[i] for i in MIXIN_KEY_ENC_TAB])[:32]
+
 def wbi_sign(params: dict, img_key: str, sub_key: str) -> dict:
-    """使用动态密钥对参数进行签名（修正版：先添加 wts 再排序）"""
-    mixin_key = img_key + sub_key
-    # ① 先添加时间戳
+    """使用正确的混排 mixin_key 对参数进行签名"""
+    # ① 计算真正的 mixin_key
+    raw_str = img_key + sub_key
+    mixin_key = get_mixin_key(raw_str)
+    # ② 先添加时间戳
     params['wts'] = int(time.time())
-    # ② 参数排序
+    # ③ 参数排序并拼接
     sorted_params = sorted(params.items())
     query = '&'.join([f"{k}={v}" for k, v in sorted_params])
-    # ③ 拼接混合密钥并生成签名
+    # ④ 计算签名
     sign_str = query + mixin_key
     w_rid = hashlib.md5(sign_str.encode()).hexdigest()
-    # ④ 添加签名
+    # ⑤ 将签名加入参数
     params['w_rid'] = w_rid
     return params
 
@@ -53,13 +67,12 @@ def wbi_sign(params: dict, img_key: str, sub_key: str) -> dict:
     "astrbot_plugin_bili_random",
     "Rasutohda",
     "通过关键词触发，随机搬运B站视频（无外部依赖，支持动态签名）",
-    "3.1.2",
+    "3.1.3",
     "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit"
 )
 class BiliRandomVideo(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
-        # 合并默认配置和传入配置
         self.config = self._load_config()
         if config:
             self.config.update(config)
@@ -71,7 +84,7 @@ class BiliRandomVideo(Star):
             "show_processing": True,
             "max_retries": 3,
             "max_video_age_days": 7,
-            "cookie": ""  # 完整的Cookie字符串，例如 "SESSDATA=xxx; bili_jct=xxx; buvid3=xxx"
+            "cookie": ""
         }
         config_path = os.path.join(os.path.dirname(__file__), "config.json")
         if os.path.exists(config_path):
@@ -93,22 +106,17 @@ class BiliRandomVideo(Star):
     @event_message_type(EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent) -> Optional[MessageEventResult]:
         msg = event.message_str.strip()
-        # 命令：重载配置
         if msg == "!bili reload":
             self.reload_config()
             return event.plain_result("✅ 配置已重新加载")
-        # 关键词检测
         keywords = self.config.get("keywords", ["随机视频"])
         if not any(kw in msg for kw in keywords):
-            return None  # 不匹配，无回复
-        # 可选：发送处理中提示
+            return None
         if self.config.get("show_processing", True):
             await event.send(event.plain_result("🎬 正在搬运，请稍等~"))
-        # 获取随机视频
         video = await self.fetch_random_video()
         if not video:
             return event.plain_result("❌ 获取视频失败，请稍后再试")
-        # 发送结果
         send_type = self.config.get("send_type", "image")
         text = self._format_video_text(video)
         if send_type == "image" and video.get("pic"):
@@ -131,9 +139,7 @@ class BiliRandomVideo(Star):
             f"🔗 {video['url']}"
         )
 
-    # ---------- API 请求（带 Cookie 和动态签名）----------
     async def fetch_json(self, url: str, params: dict = None, need_sign: bool = False) -> Optional[Dict]:
-        """发送请求，如果 need_sign=True 则添加 WBI 签名"""
         try:
             async with aiohttp.ClientSession(timeout=10) as session:
                 headers = {
@@ -146,7 +152,6 @@ class BiliRandomVideo(Star):
                 if params is None:
                     params = {}
                 if need_sign:
-                    # 获取动态密钥
                     img_key, sub_key = await get_wbi_keys(session)
                     params = wbi_sign(params, img_key, sub_key)
                 async with session.get(url, headers=headers, params=params) as resp:
@@ -163,10 +168,13 @@ class BiliRandomVideo(Star):
         max_retries = self.config.get("max_retries", 3)
         max_age_days = self.config.get("max_video_age_days", 7)
         for attempt in range(max_retries):
-            # 获取热门视频列表（随机翻页）
             page = random.randint(1, 5)
             params = {"pn": page, "ps": 30}
-            popular_data = await self.fetch_json("https://api.bilibili.com/x/web-interface/popular", params, need_sign=True)
+            popular_data = await self.fetch_json(
+                "https://api.bilibili.com/x/web-interface/popular",
+                params,
+                need_sign=True
+            )
             if not popular_data:
                 continue
             video_list = popular_data.get('data', {}).get('list', [])
@@ -176,15 +184,17 @@ class BiliRandomVideo(Star):
             bvid = selected.get('bvid')
             if not bvid:
                 continue
-            # 获取详细信息
             detail_params = {"bvid": bvid}
-            detail_data = await self.fetch_json("https://api.bilibili.com/x/web-interface/view", detail_params, need_sign=True)
+            detail_data = await self.fetch_json(
+                "https://api.bilibili.com/x/web-interface/view",
+                detail_params,
+                need_sign=True
+            )
             if not detail_data:
                 continue
             v = detail_data.get('data')
             if not v:
                 continue
-            # 时效性过滤
             if max_age_days > 0:
                 pub_ts = v.get('pubdate', 0)
                 if pub_ts and (time.time() - pub_ts) > max_age_days * 86400:
