@@ -32,7 +32,6 @@
 安装依赖
    ```bash
 pip install aiohttp qrcode cryptography
-
 重启 AstrBot 或通过 WebUI 重新加载插件
 
 ⚙️ 配置
