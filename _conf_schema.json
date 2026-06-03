@@ -27,13 +27,13 @@
         "default": true
     },
     "keywords": {
-        "description": "触发推送的关键词列表（消息包含任意一个即触发）",
+        "description": "触发推送的关键词列表",
         "type": "list",
         "items": { "type": "string" },
         "default": ["随机视频", "来点视频", "B站视频"]
     },
     "keyword_cooldown_seconds": {
-        "description": "关键词触发冷却时间（秒），每个群单独计算",
+        "description": "关键词触发冷却时间（秒）",
         "type": "int",
         "default": 600
     }
