@@ -13,7 +13,7 @@ from astrbot.api.message_components import *
 logger = logging.getLogger(__name__)
 
 @register("astrbot_plugin_bili_random", "Rasutohda",
-          "有人@机器人时随机搬运B站视频（支持分区/图片/敏感词）", "2.0.7",
+          "有人@机器人时随机搬运B站视频（支持分区/图片/敏感词）", "2.0.8",
           "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit")
 class BiliRandomVideo(Star):
     def __init__(self, context: Context):
@@ -26,10 +26,12 @@ class BiliRandomVideo(Star):
         }
         self.history_ids: List[str] = []
         self.bot_id = None
+        self.bot_name = None
         self.load_config()
-        self._init_bot_id()
+        self._init_bot_info()
 
-    def _init_bot_id(self):
+    def _init_bot_info(self):
+        """获取机器人自身ID和名称"""
         try:
             if hasattr(self.context, 'get_bot_id'):
                 self.bot_id = str(self.context.get_bot_id())
@@ -39,8 +41,11 @@ class BiliRandomVideo(Star):
                 global_config = self.context.get_config()
                 if global_config and 'bot_qq' in global_config:
                     self.bot_id = str(global_config['bot_qq'])
+            # 尝试获取机器人昵称
+            if hasattr(self.context, 'get_bot_nickname'):
+                self.bot_name = self.context.get_bot_nickname()
         except Exception as e:
-            logger.warning(f"获取 bot_id 失败: {e}")
+            logger.warning(f"获取机器人信息失败: {e}")
         if not self.bot_id:
             logger.warning("未获取到机器人ID，将使用宽松@检测")
 
@@ -133,22 +138,32 @@ class BiliRandomVideo(Star):
         return None
 
     async def get_random_video(self) -> Optional[Dict]:
-        for _ in range(5):
+        max_attempts = 8
+        for attempt in range(max_attempts):
             if self.config["region"]:
                 video = await self.get_random_video_from_region()
             else:
                 video = await self.get_random_video_from_all()
             if not video:
+                logger.warning(f"获取视频失败，尝试 {attempt+1}/{max_attempts}")
                 await asyncio.sleep(0.5)
                 continue
+            # 去重：如果重复，但已经是最后一次尝试，则接受重复
             if video["bvid"] in self.history_ids:
-                continue
+                if attempt < max_attempts - 1:
+                    logger.info(f"重复视频 {video['bvid']}，重试")
+                    continue
+                else:
+                    logger.warning(f"重复视频，但已达最大尝试次数，接受重复")
+            # 敏感词过滤
             if self.config["block_keywords"]:
                 title_lower = video["title"].lower()
                 owner_lower = video["owner"].lower()
                 if any(kw.lower() in title_lower or kw.lower() in owner_lower
                        for kw in self.config["block_keywords"]):
+                    logger.info(f"命中敏感词: {video['title']}，重试")
                     continue
+            # 记录并返回
             self.history_ids.append(video["bvid"])
             if len(self.history_ids) > 50:
                 self.history_ids.pop(0)
@@ -175,11 +190,12 @@ class BiliRandomVideo(Star):
     # ------------------- 核心事件处理 -------------------
     @event_message_type(EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent) -> Optional[MessageEventResult]:
-        """处理消息，返回 None 表示不额外回复（消息已通过 send 发送）"""
+        """处理所有消息，返回 None 表示不额外回复（但已用 send 发送）"""
         try:
             msg_text = event.message_str.strip()
+            logger.debug(f"收到消息: {msg_text}")
             
-            # 命令：重载配置
+            # 命令：重载配置（不需要@）
             if msg_text == "/bili reload":
                 self.load_config()
                 await event.send(event.plain_result("✅ 配置已重新加载"))
@@ -187,31 +203,44 @@ class BiliRandomVideo(Star):
             
             # 检测是否@机器人
             if not await self._is_at_bot(event):
-                return None  # 不是@我，不处理
+                logger.debug("未检测到@机器人，忽略")
+                return None
             
-            # 处理@消息
+            logger.info("检测到@机器人，开始处理")
+            
+            # 可选：发送处理中提示
             if self.config["show_processing"]:
                 await event.send(event.plain_result("🎥 正在随机搬运B站视频，请稍候..."))
             
             video = await self.get_random_video()
             if video:
                 await self.send_video_message(event, video)
+                logger.info(f"成功发送视频: {video['title']}")
             else:
-                await event.send(event.plain_result("❌ 获取视频失败，请稍后再试"))
+                error_msg = "❌ 获取视频失败，请稍后再试（可能网络问题或暂无视频）"
+                await event.send(event.plain_result(error_msg))
+                logger.warning("获取视频失败，已发送错误提示")
             
-            return None  # 已回复，无需额外返回消息
+            return None
         
         except Exception as e:
             logger.error(f"消息处理异常: {e}", exc_info=True)
-            await event.send(event.plain_result(f"❌ 插件出错: {str(e)}"))
+            try:
+                await event.send(event.plain_result(f"❌ 插件出错: {str(e)}"))
+            except:
+                pass
             return None
 
     async def _is_at_bot(self, event: AstrMessageEvent) -> bool:
+        """检测是否@机器人（支持多种方式）"""
+        # 方法1：内置API
         if hasattr(event, 'is_at_me'):
             try:
                 return event.is_at_me()
             except:
                 pass
+        
+        # 方法2：遍历At组件
         for seg in event.message_obj.message:
             if isinstance(seg, At):
                 target = None
@@ -221,9 +250,25 @@ class BiliRandomVideo(Star):
                     target = seg.qq
                 if not target and hasattr(seg, 'user_id'):
                     target = seg.user_id
+                if not target and hasattr(seg, 'target'):
+                    target = seg.target
                 if target:
                     if self.bot_id and str(target) == self.bot_id:
                         return True
                     if not self.bot_id:
-                        return True
+                        return True  # 宽松模式：有任何@就响应
+        
+        # 方法3：文本匹配（针对某些平台没有At组件的情况）
+        msg = event.message_str
+        if self.bot_id and f"@{self.bot_id}" in msg:
+            return True
+        if self.bot_name and f"@{self.bot_name}" in msg:
+            return True
+        # 常见格式：@机器人昵称
+        if self.bot_name and self.bot_name in msg:
+            # 避免误判（如果消息中出现了机器人昵称但不是@，可能误触发）
+            # 简单处理：如果昵称在消息开头或前面有@符号
+            if f"@{self.bot_name}" in msg or msg.startswith(self.bot_name):
+                return True
+        
         return False
