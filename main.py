@@ -9,7 +9,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.api.message_components import Video, Plain, At, Image
 
-@register("Astrbot-plugin-bili-Randomvideoshit", "your_name",
+@register("Astrbot-plugin-bili-Randomvideoshit", "Rasutohda",
           "有人@机器人时随机从B站搬运一个视频（支持自定义分区）", "1.1.0",
           "https://github.com/your_username/Astrbot-plugin-bili-Randomvideoshit")
 class BiliRandomVideo(Star):
