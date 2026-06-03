@@ -10,25 +10,25 @@ from astrbot.api import logger
 from astrbot.api.message_components import Video, Plain, At, Image
 
 @register("Astrbot_plugin_bili_Randomvideoshit", "Rasutohda",
-          "有人@机器人时随机从B站搬运一个视频（支持自定义分区）", "1.1.0",
-          "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit")
+          "有人@机器人时随机从B站搬运一个视频（支持分区、切换发送形式）", "1.2.0",
+          "https://github.com/your_username/Astrbot_plugin_bili_Randomvideoshit")
 class BiliRandomVideo(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        # 从配置中读取用户设置的分区 rid（默认 None 表示全站排行榜）
+        # 配置项
         self.region_id = None
-        self.use_single_random = False   # False = 使用排行榜/分区模式；True = 随机BV号（不推荐）
+        self.send_type = "link"   # 可选 link / image
+        self.use_single_random = False
         self.history_ids: List[str] = []
         self.load_config()
 
     def load_config(self):
-        """加载用户配置（分区）"""
-        config = self.context.get_config()  # 获取插件配置
+        """加载用户配置（分区 + 发送形式）"""
+        config = self.context.get_config()
         if config:
-            # 配置项: region 可以是 rid 数字或分区名称字符串
+            # 分区配置
             region_conf = config.get("region", None)
             if region_conf:
-                # 尝试转换为整数 rid，否则通过映射表转换
                 rid = self.parse_region(region_conf)
                 if rid is not None:
                     self.region_id = rid
@@ -38,9 +38,16 @@ class BiliRandomVideo(Star):
             else:
                 logger.info("未配置分区，使用全站排行榜")
 
+            # 发送形式配置
+            send_type_conf = config.get("send_type", "link")
+            if send_type_conf in ("link", "image"):
+                self.send_type = send_type_conf
+                logger.info(f"发送形式设置为: {self.send_type}")
+            else:
+                logger.warning(f"未知的 send_type: {send_type_conf}，使用默认 link")
+
     def parse_region(self, region_input) -> Optional[int]:
         """将分区名称或 rid 转换为整数的 rid"""
-        # 常见分区映射
         region_map = {
             "动画": 1, "动漫": 1,
             "国创": 168,
@@ -59,32 +66,23 @@ class BiliRandomVideo(Star):
             "影视": 181,
             "放映厅": 23
         }
-        # 如果输入是数字字符串或整数
         try:
             rid = int(region_input)
             return rid
         except (ValueError, TypeError):
             pass
-        # 如果是字符串名称
         if isinstance(region_input, str):
             key = region_input.strip()
             if key in region_map:
                 return region_map[key]
-            # 尝试直接转换拼音或英文等（可扩展）
         return None
 
     async def get_random_video_from_region(self) -> Optional[Dict[str, Any]]:
-        """从指定分区获取随机视频（使用分区视频列表接口）"""
         if self.region_id is None:
-            # 没有分区 → 使用全站排行榜
             return await self.get_random_video_from_rank()
 
         api_url = "https://api.bilibili.com/x/web-interface/dynamic/region"
-        params = {
-            "rid": self.region_id,
-            "pn": 1,
-            "ps": 50   # 每页50个，足够随机
-        }
+        params = {"rid": self.region_id, "pn": 1, "ps": 50}
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 headers = {
@@ -100,7 +98,6 @@ class BiliRandomVideo(Star):
                 if not archives:
                     logger.warning(f"分区 {self.region_id} 没有视频数据")
                     return None
-                # 随机选一个
                 video = random.choice(archives)
                 return await self.get_video_details(video.get("bvid"))
         except Exception as e:
@@ -108,7 +105,6 @@ class BiliRandomVideo(Star):
             return None
 
     async def get_random_video_from_rank(self) -> Optional[Dict[str, Any]]:
-        """从全站排行榜随机抽一个（原方式一）"""
         rank_api_url = "https://api.bilibili.com/x/web-interface/ranking/v2"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -132,7 +128,6 @@ class BiliRandomVideo(Star):
             return None
 
     async def get_random_video_by_bvid(self) -> Optional[Dict[str, Any]]:
-        """方式二：随机BV号（备胎，默认关闭）"""
         max_attempts = 10
         base62_chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
         for attempt in range(max_attempts):
@@ -145,7 +140,6 @@ class BiliRandomVideo(Star):
         return None
 
     async def get_video_details(self, bvid: str) -> Optional[Dict[str, Any]]:
-        """获取视频详细信息"""
         api_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -173,18 +167,16 @@ class BiliRandomVideo(Star):
             return None
 
     async def get_random_video(self) -> Optional[Dict[str, Any]]:
-        """统一入口：优先使用配置的分区，否则全站排行榜"""
         if self.use_single_random:
             return await self.get_random_video_by_bvid()
         else:
-            # 如果有自定义分区，则从分区获取；否则从全站排行榜获取
             if self.region_id is not None:
                 return await self.get_random_video_from_region()
             else:
                 return await self.get_random_video_from_rank()
 
     async def send_video_as_link(self, event: AstrMessageEvent, video_info: Dict[str, Any]):
-        """以文字+链接形式发送（兼容所有平台）"""
+        """方式1：纯文本 + 链接"""
         stats = video_info.get("stat", {})
         play_count = stats.get("view", "N/A")
         like_count = stats.get("like", "N/A")
@@ -196,11 +188,39 @@ class BiliRandomVideo(Star):
             Plain(f"🔗 链接：{video_info['url']}")
         ]
         yield event.chain_result(message_chain)
-        logger.info(f"已发送视频: {video_info['title']}")
+        logger.info(f"已发送视频(链接形式): {video_info['title']}")
+
+    async def send_video_as_image(self, event: AstrMessageEvent, video_info: Dict[str, Any]):
+        """方式2：封面图片 + 文字信息（降级为链接）"""
+        stats = video_info.get("stat", {})
+        play_count = stats.get("view", "N/A")
+        like_count = stats.get("like", "N/A")
+        text_info = (
+            f"🎬 随机搬运一个B站视频\n"
+            f"📺 标题：{video_info['title']}\n"
+            f"👤 UP主：{video_info['owner']}\n"
+            f"🎉 播放量：{play_count} | 👍 点赞：{like_count}\n"
+            f"🔗 链接：{video_info['url']}"
+        )
+
+        # 尝试发送图片
+        pic_url = video_info.get("pic")
+        if pic_url:
+            try:
+                # 直接使用 Image 组件发送图片 URL
+                yield event.chain_result([Image.fromURL(pic_url), Plain(f"\n{text_info}")])
+                logger.info(f"已发送视频(图片形式): {video_info['title']}")
+                return
+            except Exception as e:
+                logger.error(f"发送封面图片失败，降级为链接形式: {e}")
+        else:
+            logger.warning("视频无封面图，降级为链接形式")
+
+        # 降级：发送纯文本链接
+        yield event.chain_result([Plain(text_info)])
 
     async def on_at_message(self, event: AstrMessageEvent):
         """处理@消息"""
-        # 检查是否被@（兼容多平台）
         message_chain = event.message_obj.message
         is_at_me = False
         bot_id = self.context.get_bot_id() if hasattr(self.context, 'get_bot_id') else None
@@ -235,10 +255,13 @@ class BiliRandomVideo(Star):
         if len(self.history_ids) > 50:
             self.history_ids.pop(0)
 
-        await self.send_video_as_link(event, video_info)
+        # 根据用户配置选择发送形式
+        if self.send_type == "image":
+            await self.send_video_as_image(event, video_info)
+        else:
+            await self.send_video_as_link(event, video_info)
 
     async def on_message(self, event: AstrMessageEvent):
-        """消息入口"""
         if any(isinstance(seg, At) for seg in event.message_obj.message):
             async for result in self.on_at_message(event):
                 yield result
