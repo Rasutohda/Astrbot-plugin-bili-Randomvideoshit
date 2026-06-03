@@ -41,12 +41,19 @@
 
    ### 配置项	类型	默认值	说明
 auto_start	bool	true	插件启动时自动开启定时推送
+
 scan_interval	int	3600	定时推送间隔（秒），最小 60 秒
+
 keyword_cooldown_seconds	int	600	关键词触发冷却时间（秒），0 表示无冷却
+
 use_whitelist_mode	bool	false	true：白名单模式；false：黑名单模式
+
 whitelist_groups	array	[]	白名单群组 ID 列表
+
 blacklist_groups	array	[]	黑名单群组 ID 列表
+
 keywords	array	["随机视频", "来点视频", "B站视频"]	触发关键词列表
+
 
 注意：群组 ID 可通过机器人收到的消息日志获取，格式通常为纯数字字符串。
 
@@ -55,15 +62,26 @@ keywords	array	["随机视频", "来点视频", "B站视频"]	触发关键词列
 
 ### 命令	说明
 /bili now	立即推送一个随机视频（手动调用有 60 秒冷却）
+
 /bili login	扫码登录 B 站账号（发送二维码图片）
+
 /bili on	开启定时推送
+
 /bili off	关闭定时推送
+
 /bili status	查看插件当前状态（定时任务、Cookie、群组等）
+
 /bili mode whitelist	切换为白名单模式（仅白名单群组接收推送）
+
 /bili mode blacklist	切换为黑名单模式（黑名单群组不接收推送）
+
 /bili interval <秒>	设置定时推送间隔（最小 60 秒）
+
 /bili clear	清除当前群的关键词冷却记录（仅群聊）
+
 /bili help	显示帮助信息
+
+
 ## 关键词触发
 在群聊中发送包含配置中 keywords 关键词的消息（例如“随机视频”），机器人会自动推送一个随机视频，并进入冷却时间（默认 10 分钟）。
 
