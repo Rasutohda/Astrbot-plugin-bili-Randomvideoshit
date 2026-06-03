@@ -30,7 +30,6 @@
    cd /path/to/AstrBot/data/plugins
    git clone https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit.git
 安装依赖
-
 bash
 pip install aiohttp qrcode cryptography
 重启 AstrBot 或通过 WebUI 重新加载插件
