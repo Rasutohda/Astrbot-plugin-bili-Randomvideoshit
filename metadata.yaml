@@ -1,4 +1,4 @@
-name: Astrbot-plugin-bili-Randomvideoshit   # 原来为 astrbot_plugin_bili_random_video
+name: Astrbot_plugin_bili_Randomvideoshit   # 原来为 astrbot_plugin_bili_random_video
 display_name: B站随机视频搬运（支持分区）
 version: 1.1.0
 author: Rasutohda
@@ -8,7 +8,7 @@ support_platforms:
   - aiocqhttp
   - telegram
   - discord
-repo: https://github.com/Rasutohda/Astrbot-plugin-bili-Randomvideoshit   # 同步修改
+repo: https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit   # 同步修改
 
 config:
   region:
