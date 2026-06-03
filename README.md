@@ -34,6 +34,9 @@
    pip install aiohttp qrcode cryptography
 重启 AstrBot 或通过 WebUI 重新加载插件
 
+
+
+
 ### ⚙️ 配置
 插件配置文件位于 data/plugins/Astrbot_plugin_bili_Randomvideoshit/_conf_schema.json，可通过 AstrBot WebUI 的“插件配置”界面修改，或直接编辑 JSON 文件。
 
