@@ -1,46 +1,3 @@
-AstrBot 插件 - B站随机视频搬运
-
-📖 简介
-Astrbot_plugin_bili_Randomvideoshit 是一款为 AstrBot 开发的 B 站随机视频搬运插件。它能够自动获取 B 站热门视频，并在群聊中通过命令或关键词触发推送，也支持定时自动推送。
-
-核心特性：
-
-🔑 扫码登录：无需手动抓取 Cookie，直接使用 B 站 App 扫码登录，Cookie 自动加密保存
-
-🎲 随机热门视频：从 B 站热门榜单中随机选取视频，自动过滤已推送过的视频
-
-⏰ 定时推送：按设定间隔自动向所有已加入的群组推送视频
-
-💬 关键词触发：群内发送指定关键词（如“随机视频”）即可触发推送，可配置冷却时间
-
-📦 批量发送：多群推送时自动分组发送，避免触发风控
-
-🔒 加密存储：Cookie 使用 cryptography 库加密存储，安全可靠
-
-🚦 群组黑白名单：支持白名单/黑名单模式，灵活控制推送范围
-
-🧹 自动清理：自动清理过期的发送记录和冷却记录
-
-🚀 安装
-方法一：通过 WebUI 安装（推荐）
-进入 AstrBot WebUI → 插件管理 → 安装插件
-
-输入仓库地址：https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit
-
-点击安装，等待完成
-
-方法二：手动安装
-克隆或下载本仓库到 AstrBot/data/plugins/ 目录下
-
-bash
-cd /path/to/AstrBot/data/plugins
-git clone https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit.git
-安装依赖
-
-bash
-pip install aiohttp qrcode cryptography
-重启 AstrBot 或通过 WebUI 重新加载插件
-
 ⚙️ 配置
 插件配置文件位于 data/plugins/Astrbot_plugin_bili_Randomvideoshit/_conf_schema.json，可通过 AstrBot WebUI 的“插件配置”界面修改，或直接编辑 JSON 文件。
 
@@ -123,3 +80,7 @@ pip install aiohttp qrcode cryptography
 AstrBot 项目主页
 
 插件仓库
+
+作者: Rasutohda
+版本: 2.0.0
+最后更新: 2026-06-03
