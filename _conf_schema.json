@@ -1,40 +1,59 @@
 {
-    "use_whitelist_mode": {
-        "description": "使用白名单模式（否则为黑名单模式）",
-        "type": "bool",
-        "default": false
-    },
-    "whitelist_groups": {
-        "description": "白名单群号列表",
-        "type": "list",
-        "items": { "type": "string" },
-        "default": []
-    },
-    "blacklist_groups": {
-        "description": "黑名单群号列表",
-        "type": "list",
-        "items": { "type": "string" },
-        "default": []
+  "type": "object",
+  "properties": {
+    "auto_start": {
+      "type": "boolean",
+      "default": true,
+      "title": "自动启动定时推送",
+      "description": "插件加载后是否自动开启定时推送"
     },
     "scan_interval": {
-        "description": "定时自动推送间隔（秒）",
-        "type": "int",
-        "default": 3600
-    },
-    "auto_start": {
-        "description": "插件启动时自动开启定时推送",
-        "type": "bool",
-        "default": true
-    },
-    "keywords": {
-        "description": "触发推送的关键词列表",
-        "type": "list",
-        "items": { "type": "string" },
-        "default": ["随机视频", "来点视频", "B站视频"]
+      "type": "integer",
+      "default": 3600,
+      "minimum": 60,
+      "title": "定时推送间隔",
+      "description": "定时推送视频的间隔时间（秒），最小60秒"
     },
     "keyword_cooldown_seconds": {
-        "description": "关键词触发冷却时间（秒）",
-        "type": "int",
-        "default": 600
+      "type": "integer",
+      "default": 600,
+      "minimum": 0,
+      "title": "关键词冷却时间",
+      "description": "群聊中关键词触发后的冷却时间（秒），0表示无冷却"
+    },
+    "use_whitelist_mode": {
+      "type": "boolean",
+      "default": false,
+      "title": "启用白名单模式",
+      "description": "true：仅白名单群可接收；false：黑名单模式"
+    },
+    "whitelist_groups": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "title": "白名单群组",
+      "description": "允许接收推送的群组ID列表"
+    },
+    "blacklist_groups": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "title": "黑名单群组",
+      "description": "禁止接收推送的群组ID列表"
+    },
+    "keywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": ["随机视频", "来点视频", "B站视频"],
+      "title": "触发关键词",
+      "description": "在群聊中发送包含这些关键词的消息时触发视频推送"
     }
+  },
+  "additionalProperties": false
 }
