@@ -1,16 +1,15 @@
-name: astrbot_plugin_bili_random_video
+name: Astrbot-plugin-bili-Randomvideoshit   # 原来为 astrbot_plugin_bili_random_video
 display_name: B站随机视频搬运（支持分区）
 version: 1.1.0
-author: your_name
+author: Rasutohda
 description: 当有人@机器人时，自动从指定分区或全站随机搬运一个B站视频。
 astrbot_version: ">=4.16.0,<5"
 support_platforms:
   - aiocqhttp
   - telegram
   - discord
-repo: https://github.com/your_username/astrbot_plugin_bili_random_video
+repo: https://github.com/Rasutohda/Astrbot-plugin-bili-Randomvideoshit   # 同步修改
 
-# 可配置项（在WebUI中显示）
 config:
   region:
     title: 分区名称或ID
