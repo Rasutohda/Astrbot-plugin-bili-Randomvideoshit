@@ -3,17 +3,19 @@ import asyncio
 import httpx
 import traceback
 from typing import Optional, Dict, Any, List
-from astrbot.api.event import AstrMessageEvent
+from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.api.message_components import Plain, At, Image
 
 @register("Astrbot_plugin_bili_Randomvideoshit", "Rasutohda",
-          "有人@机器人时随机从B站搬运一个视频（支持分区、切换发送形式）", "1.2.2",
-          "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit")
+          "有人@机器人时随机从B站搬运一个视频（支持分区、切换发送形式）", "1.2.3",
+          "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit",
+          priority=0)   # 最高优先级，确保先于其他插件处理消息
 class BiliRandomVideo(Star):
     def __init__(self, context: Context):
         super().__init__(context)
+        # 配置项
         self.region_id = None
         self.send_type = "link"
         self.use_single_random = False
@@ -23,6 +25,7 @@ class BiliRandomVideo(Star):
         self.load_config()
 
     def _init_bot_id(self):
+        """尝试获取机器人自身ID"""
         try:
             if hasattr(self.context, 'get_bot_id'):
                 self.bot_id = self.context.get_bot_id()
@@ -41,8 +44,10 @@ class BiliRandomVideo(Star):
             logger.warning("未获取到机器人自身ID，将采用宽松AT检测")
 
     def load_config(self):
+        """加载分区和发送形式配置"""
         config = self.context.get_config()
         if config:
+            # 分区配置
             region_conf = config.get("region", None)
             if region_conf:
                 rid = self.parse_region(region_conf)
@@ -54,6 +59,7 @@ class BiliRandomVideo(Star):
             else:
                 logger.info("未配置分区，使用全站排行榜")
 
+            # 发送形式配置
             send_type_conf = config.get("send_type", "link")
             if send_type_conf in ("link", "image"):
                 self.send_type = send_type_conf
@@ -62,6 +68,7 @@ class BiliRandomVideo(Star):
                 logger.warning(f"未知 send_type: {send_type_conf}，使用 link")
 
     def parse_region(self, region_input) -> Optional[int]:
+        """分区名称或rid转整数rid"""
         region_map = {
             "动画": 1, "动漫": 1, "国创": 168, "音乐": 3, "舞蹈": 129,
             "游戏": 4, "知识": 36, "科技": 188, "数码": 147, "生活": 160,
@@ -78,6 +85,7 @@ class BiliRandomVideo(Star):
                 return region_map[key]
         return None
 
+    # ------------------- B站API相关 -------------------
     async def get_random_video_from_region(self) -> Optional[Dict[str, Any]]:
         if self.region_id is None:
             return await self.get_random_video_from_rank()
@@ -165,6 +173,7 @@ class BiliRandomVideo(Star):
             else:
                 return await self.get_random_video_from_rank()
 
+    # ------------------- 发送消息 -------------------
     async def send_video_as_link(self, event: AstrMessageEvent, video_info: Dict[str, Any]):
         stats = video_info.get("stat", {})
         play_count = stats.get("view", "N/A")
@@ -196,25 +205,19 @@ class BiliRandomVideo(Star):
                 logger.error(f"发送封面图片失败: {e}，降级为链接")
         yield event.plain_result(text)
 
-    async def on_at_message(self, event: AstrMessageEvent):
-        """处理@消息 - 带详细日志和异常捕获"""
-        logger.info("=== 进入 on_at_message 方法 ===")
+    async def handle_at_message(self, event: AstrMessageEvent):
+        """实际的业务逻辑（被全局过滤器调用）"""
+        logger.info("进入 handle_at_message")
         try:
-            # 发送处理中状态
-            logger.info("尝试发送 '正在获取视频...' 消息")
+            # 发送处理中
             yield event.plain_result("🎥 正在随机搬运B站视频，请稍候...")
-            logger.info("已发送处理中提示")
 
-            logger.info("开始调用 get_random_video()")
             video_info = await self.get_random_video()
-            logger.info(f"get_random_video 返回: {video_info is not None}")
-
             if not video_info:
-                logger.warning("获取视频失败，发送错误提示")
                 yield event.plain_result("❌ 获取视频失败，请稍后再试")
                 return
 
-            # 去重检查
+            # 简单去重
             if video_info["bvid"] in self.history_ids:
                 logger.info(f"重复视频 {video_info['bvid']}，重新获取")
                 video_info = await self.get_random_video()
@@ -226,27 +229,28 @@ class BiliRandomVideo(Star):
             if len(self.history_ids) > 50:
                 self.history_ids.pop(0)
 
-            # 根据配置发送
             if self.send_type == "image":
-                logger.info("使用图片形式发送")
                 await self.send_video_as_image(event, video_info)
             else:
-                logger.info("使用链接形式发送")
                 await self.send_video_as_link(event, video_info)
 
-            logger.info("=== on_at_message 执行完成 ===")
+            logger.info("handle_at_message 完成")
         except Exception as e:
-            logger.error(f"on_at_message 发生异常: {e}\n{traceback.format_exc()}")
+            logger.error(f"handle_at_message 异常: {e}\n{traceback.format_exc()}")
             try:
                 yield event.plain_result(f"❌ 处理出错: {str(e)}")
             except:
                 pass
 
-    async def on_message(self, event: AstrMessageEvent):
-        """消息入口：判断是否被AT"""
-        logger.debug(f"收到消息: {event.message_str}")
-        message_chain = event.message_obj.message
+    # ------------------- 全局过滤器 -------------------
+    @filter
+    async def message_filter(self, event: AstrMessageEvent):
+        """全局消息过滤器，优先级最高，不会被其他插件拦截"""
+        logger.debug(f"[Filter] 收到消息: {event.message_str}")
+        
+        # 检查是否@了机器人
         is_at_me = False
+        message_chain = event.message_obj.message
         for segment in message_chain:
             if isinstance(segment, At):
                 target = None
@@ -258,7 +262,7 @@ class BiliRandomVideo(Star):
                     target = segment.user_id
                 else:
                     target = str(segment) if segment else None
-                logger.debug(f"发现 At 段, target={target}, bot_id={self.bot_id}")
+                logger.debug(f"[Filter] At段 target={target}, bot_id={self.bot_id}")
                 if target:
                     target_str = str(target)
                     if self.bot_id and target_str == str(self.bot_id):
@@ -266,11 +270,16 @@ class BiliRandomVideo(Star):
                         break
                     elif not self.bot_id and target_str.lower() != "all":
                         is_at_me = True
-                        logger.warning(f"未获取到bot_id，但检测到At目标 {target_str}，将处理该消息")
+                        logger.warning(f"[Filter] 无bot_id，但检测到At目标 {target_str}，视为@机器人")
                         break
+        
         if is_at_me:
-            logger.info("检测到@机器人的消息，开始处理")
-            async for result in self.on_at_message(event):
+            logger.info("[Filter] 检测到@机器人，开始处理")
+            # 直接调用业务逻辑，并产出回复消息
+            async for result in self.handle_at_message(event):
                 yield result
+            # 注意：这里返回 True 表示继续将原始消息传递给其他插件（可根据需求改为 False 阻止后续处理）
+            return True
         else:
-            logger.debug("未检测到@机器人的消息，忽略")
+            logger.debug("[Filter] 未检测到@机器人，放行")
+            return True   # 放行，让其他插件继续处理
