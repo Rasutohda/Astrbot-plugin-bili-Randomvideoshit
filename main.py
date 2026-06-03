@@ -34,15 +34,18 @@ async def get_wbi_keys(session: aiohttp.ClientSession) -> tuple:
         return img_key, sub_key
 
 def wbi_sign(params: dict, img_key: str, sub_key: str) -> dict:
-    """使用动态密钥对参数进行签名"""
+    """使用动态密钥对参数进行签名（修正版：先添加 wts 再排序）"""
     mixin_key = img_key + sub_key
-    # 按照 WBI 签名规则：参数排序、拼接、加盐、md5
+    # ① 先添加时间戳
+    params['wts'] = int(time.time())
+    # ② 参数排序
     sorted_params = sorted(params.items())
     query = '&'.join([f"{k}={v}" for k, v in sorted_params])
+    # ③ 拼接混合密钥并生成签名
     sign_str = query + mixin_key
     w_rid = hashlib.md5(sign_str.encode()).hexdigest()
+    # ④ 添加签名
     params['w_rid'] = w_rid
-    params['wts'] = int(time.time())
     return params
 
 # ---------- 插件主类 ----------
