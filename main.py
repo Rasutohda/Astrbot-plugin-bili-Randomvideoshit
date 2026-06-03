@@ -45,11 +45,11 @@ BATCH_SEND_INTERVAL = 1
 
 
 @register(
-    "astrbot_plugin_bili_random_video",
-    "your_name",
-    "B站随机视频搬运插件（支持扫码登录）",
-    "2.0.0",
-    "https://github.com/yourname/astrbot_plugin_bili_random_video"
+    "Astrbot_plugin_bili_Randomvideoshit",  # 插件ID
+    "Rasutohda",                            # 作者
+    "B站随机视频搬运插件（支持扫码登录）",      # 描述
+    "2.0.0",                                 # 版本
+    "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit"
 )
 class BiliRandomVideo(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -66,7 +66,7 @@ class BiliRandomVideo(Star):
         self.keywords = self.config.get("keywords", ["随机视频", "来点视频", "B站视频"])
 
         # 数据目录
-        self._data_dir = StarTools.get_data_dir("astrbot_plugin_bili_random_video")
+        self._data_dir = StarTools.get_data_dir("Astrbot_plugin_bili_Randomvideoshit")
         self._cookie_file = self._data_dir / "cookie.enc"
         self._bound_groups_file = self._data_dir / "bound_groups.json"
         self._sent_videos_file = self._data_dir / "sent_videos.json"
@@ -90,6 +90,17 @@ class BiliRandomVideo(Star):
     # ==================== 初始化与销毁 ====================
     async def initialize(self):
         await self._load_all_data()
+        # 自动添加白名单群组到 bound_groups（即使从未触发关键词）
+        if self.use_whitelist_mode and self.whitelist_groups:
+            for gid in self.whitelist_groups:
+                gid_str = str(gid)
+                if gid_str not in self.bound_groups:
+                    # 构造 unified_msg_origin
+                    origin = f"default:GroupMessage:{gid_str}"
+                    self.bound_groups[gid_str] = origin
+            await self._save_bound_groups()
+            logger.info(f"已自动添加白名单群组: {self.whitelist_groups}")
+        
         if self.cookie:
             logger.info("B站Cookie已加载")
             if self.auto_start and not self._running:
@@ -190,6 +201,7 @@ class BiliRandomVideo(Star):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://www.bilibili.com/",
             "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9",
         }
 
     class WbiHelper:
@@ -255,7 +267,7 @@ class BiliRandomVideo(Star):
                         await asyncio.sleep(2 ** attempt)
                         continue
                     else:
-                        logger.warning(f"API错误 {url}: {data.get('message')}")
+                        logger.warning(f"API错误 {url}: {data.get('message')} (code={data.get('code')})")
                         return None
             except Exception as e:
                 logger.warning(f"请求失败 {attempt+1}/{retry}: {e}")
@@ -354,11 +366,16 @@ class BiliRandomVideo(Star):
     async def _push_to_all_allowed_groups(self):
         if not self.cookie:
             return
+        if not self.bound_groups:
+            logger.debug("没有已绑定的群组，跳过定时推送")
+            return
         video = await self._fetch_random_video()
         if not video:
             return
         chain = self._build_message_chain(video)
         allowed = [(gid, umo) for gid, umo in self.bound_groups.items() if self._is_group_allowed(gid)]
+        if not allowed:
+            return
         for i in range(0, len(allowed), BATCH_SEND_SIZE):
             batch = allowed[i:i+BATCH_SEND_SIZE]
             tasks = [self.context.send_message(umo, chain) for _, umo in batch]
@@ -404,34 +421,52 @@ class BiliRandomVideo(Star):
         else:
             await event.send(event.chain_result([Plain(f"未知子命令: {cmd}，请使用 bili help 查看帮助")]))
 
-    # ==================== 关键词处理（使用 handle_event） ====================
+    # ==================== 关键词处理（无装饰器，自动接收所有非命令消息） ====================
     async def handle_event(self, event: AstrMessageEvent):
+        """处理所有未被命令匹配的消息，用于关键词触发"""
         msg = event.message_str.strip()
         if not msg:
             return
+        
+        # 调试日志
+        logger.info(f"[handle_event] 收到消息: {msg}")
+        
+        # 跳过命令消息（避免重复处理）
         if msg.lower().startswith(('bili', '/bili')):
             return
 
+        # 获取群组ID（仅在群聊中处理关键词）
         group_id = str(event.message_obj.group_id) if event.message_obj.group_id else None
         if not group_id:
+            logger.debug(f"私聊消息，忽略关键词触发: {msg}")
             return
 
-        if any(kw in msg for kw in self.keywords):
-            if group_id not in self.bound_groups:
-                self.bound_groups[group_id] = event.unified_msg_origin
-                await self._save_bound_groups()
-                logger.info(f"自动记录群组: {group_id}")
-            now = time.time()
-            last = self.group_cooldown.get(group_id, 0)
-            if now - last < self.keyword_cooldown_seconds:
-                remain = int(self.keyword_cooldown_seconds - (now - last))
-                await event.send(event.chain_result([Plain(f"⏳ 冷却中，请 {remain} 秒后再试")]))
-                return
-            await event.send(event.chain_result([Plain("🎬 检测到关键词，正在搬运视频...")]))
-            success = await self._push_to_current_event(event)
-            if success:
-                self.group_cooldown[group_id] = now
-                await self._save_group_cooldown()
+        # 关键词匹配（支持部分匹配）
+        matched = any(kw in msg for kw in self.keywords)
+        if not matched:
+            return
+
+        logger.info(f"检测到关键词，群组: {group_id}, 消息: {msg}")
+
+        # 自动记录群组（如果尚未记录）
+        if group_id not in self.bound_groups:
+            self.bound_groups[group_id] = event.unified_msg_origin
+            await self._save_bound_groups()
+            logger.info(f"自动记录群组: {group_id}")
+
+        # 冷却检查
+        now = time.time()
+        last = self.group_cooldown.get(group_id, 0)
+        if now - last < self.keyword_cooldown_seconds:
+            remain = int(self.keyword_cooldown_seconds - (now - last))
+            await event.send(event.chain_result([Plain(f"⏳ 冷却中，请 {remain} 秒后再试")]))
+            return
+
+        await event.send(event.chain_result([Plain("🎬 检测到关键词，正在搬运视频...")]))
+        success = await self._push_to_current_event(event)
+        if success:
+            self.group_cooldown[group_id] = now
+            await self._save_group_cooldown()
 
     # ---------- 子命令实现（普通协程，使用 event.send） ----------
     async def _cmd_help(self, event: AstrMessageEvent):
