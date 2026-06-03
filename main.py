@@ -10,7 +10,7 @@ from astrbot.api.message_components import Plain, At, Image
 
 @register("Astrbot_plugin_bili_Randomvideoshit", "Rasutohda",
           "有人@机器人时随机从B站搬运一个视频（支持分区、切换发送形式）", "1.2.2",
-          "https://github.com/your_username/Astrbot_plugin_bili_Randomvideoshit")
+          "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit")
 class BiliRandomVideo(Star):
     def __init__(self, context: Context):
         super().__init__(context)
