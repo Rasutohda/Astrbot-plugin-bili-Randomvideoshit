@@ -1,1 +1,3 @@
-httpx>=0.24.0
+bilibili-api-python>=16.0.0
+aiohttp
+astrbot-plugin
