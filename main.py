@@ -6,7 +6,7 @@ import time
 import aiohttp
 from typing import Optional, Dict, Any
 from astrbot.api.star import Context, Star, register
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Plain, Image
 
 logger = logging.getLogger(__name__)
@@ -15,13 +15,17 @@ logger = logging.getLogger(__name__)
     "astrbot_plugin_bili_random",
     "Rasutohda",
     "通过关键词触发，随机搬运B站视频（支持配置）",
-    "3.0.2",
+    "3.0.3",
     "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit"
 )
 class BiliRandomVideo(Star):
     def __init__(self, context: Context):
         super().__init__(context)
         self.config = self._load_config()
+        # 注册消息事件处理器（替代所有装饰器）
+        self.handler_id = context.register_event_handler(
+            AstrMessageEvent, self.on_message, priority=0
+        )
 
     def _load_config(self) -> dict:
         default_config = {
@@ -49,9 +53,8 @@ class BiliRandomVideo(Star):
         self.config = self._load_config()
         logger.info("配置已重载")
 
-    @filter
-    async def message_filter(self, event: AstrMessageEvent) -> bool:
-        """消息过滤器，返回 True 继续传播，False 阻止传播"""
+    async def on_message(self, event: AstrMessageEvent) -> bool:
+        """消息事件处理器，返回 True 放行，False 阻止传播"""
         msg = event.message_str.strip()
 
         # 命令：重载配置
@@ -122,7 +125,6 @@ class BiliRandomVideo(Star):
         max_age_days = self.config.get("max_video_age_days", 7)
 
         for _ in range(max_retries):
-            # 获取热门列表
             if hot_series_id == 0:
                 hot_data = await self.fetch_json("https://api.bilibili.com/x/web-interface/popular")
                 video_list = hot_data.get('data') if hot_data else None
@@ -144,7 +146,6 @@ class BiliRandomVideo(Star):
                 continue
 
             v = detail_data['data']
-            # 时效性过滤
             if max_age_days > 0:
                 pub_ts = v.get('pubdate', 0)
                 if pub_ts and (time.time() - pub_ts) > max_age_days * 86400:
@@ -172,3 +173,9 @@ class BiliRandomVideo(Star):
         if num >= 10000:
             return f"{num/10000:.1f}万"
         return str(num)
+
+    async def unload(self):
+        """插件卸载时注销事件处理器"""
+        if hasattr(self, 'handler_id'):
+            self.context.unregister_event_handler(self.handler_id)
+            logger.info("已注销消息事件处理器")
