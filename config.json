@@ -1,8 +1,53 @@
 {
-    "keywords": ["随机视频", "来点视频", "随机B站", "来一个视频"],
-    "send_type": "image",
-    "show_processing": true,
-    "max_retries": 3,
-    "hot_series_id": 0,
-    "max_video_age_days": 7
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "auto_start": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否在插件启动时自动开启定时推送"
+    },
+    "scan_interval": {
+      "type": "integer",
+      "default": 3600,
+      "minimum": 60,
+      "description": "定时推送间隔（秒），最小值60秒"
+    },
+    "keyword_cooldown_seconds": {
+      "type": "integer",
+      "default": 600,
+      "minimum": 0,
+      "description": "关键词触发的冷却时间（秒），0表示无冷却"
+    },
+    "use_whitelist_mode": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否启用白名单模式（true=仅白名单群可接收，false=黑名单模式）"
+    },
+    "whitelist_groups": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "白名单群组ID列表（仅当use_whitelist_mode为true时生效）"
+    },
+    "blacklist_groups": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "黑名单群组ID列表（仅当use_whitelist_mode为false时生效）"
+    },
+    "keywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": ["随机视频", "来点视频", "B站视频"],
+      "description": "触发视频推送的关键词列表"
+    }
+  },
+  "additionalProperties": false
 }
