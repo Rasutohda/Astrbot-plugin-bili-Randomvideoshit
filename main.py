@@ -2,42 +2,21 @@ import random
 import json
 import os
 import logging
-import time
-import hashlib
-import aiohttp
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import AstrMessageEvent, MessageEventResult
 from astrbot.api.event.filter import event_message_type, EventMessageType
 from astrbot.api.message_components import Plain, Image
+from bilibili_api import sync, Credential
+from bilibili_api import popular_series, video, user as bilibili_user
 
 logger = logging.getLogger(__name__)
-
-# ---------- WBI 签名函数 ----------
-def wbi_sign(params: dict, key: str = "ea1db124af3c7062474693fa704f4ff8") -> dict:
-    """
-    为 B 站 API 请求添加 WBI 签名（w_rid + wts）
-    :param params: 原始请求参数字典
-    :param key: 固定密钥（已验证长期有效）
-    :return: 添加了 w_rid 和 wts 的新字典
-    """
-    # 1. 添加当前时间戳
-    params['wts'] = int(time.time())
-    # 2. 按键名排序，过滤掉 None 值
-    sorted_params = sorted([(k, v) for k, v in params.items() if v is not None])
-    # 3. 拼接字符串
-    param_str = '&'.join([f"{k}={v}" for k, v in sorted_params])
-    sign_str = param_str + key
-    # 4. 计算 MD5 签名
-    params['w_rid'] = hashlib.md5(sign_str.encode()).hexdigest()
-    return params
-
 
 @register(
     "astrbot_plugin_bili_random",
     "Rasutohda",
-    "通过关键词触发，随机搬运B站视频（支持配置，已适配WBI签名）",
-    "3.0.5",
+    "通过关键词触发，随机搬运B站视频（基于bilibili-api-python）",
+    "3.1.0",
     "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit"
 )
 class BiliRandomVideo(Star):
@@ -46,6 +25,28 @@ class BiliRandomVideo(Star):
         self.config = self._load_config()
         if config:
             self.config.update(config)
+        self.credential = None
+        self._init_credential()
+
+    def _init_credential(self):
+        """初始化Bilibili API认证信息"""
+        try:
+            cred_config = self.config.get("credential", {})
+            sessdata = cred_config.get("sessdata", os.getenv("BILI_SESSDATA"))
+            bili_jct = cred_config.get("bili_jct", os.getenv("BILI_JCT"))
+            buvid3 = cred_config.get("buvid3", os.getenv("BILI_BUVID3"))
+            
+            if sessdata and bili_jct and buvid3:
+                self.credential = Credential(
+                    sessdata=sessdata,
+                    bili_jct=bili_jct,
+                    buvid3=buvid3
+                )
+                logger.info("B站API认证信息已初始化")
+            else:
+                logger.warning("B站API认证信息不完整，部分功能可能受限")
+        except Exception as e:
+            logger.error(f"初始化B站API认证失败: {e}")
 
     def _load_config(self) -> dict:
         default_config = {
@@ -53,8 +54,12 @@ class BiliRandomVideo(Star):
             "send_type": "image",
             "show_processing": True,
             "max_retries": 3,
-            "hot_series_id": 0,
-            "max_video_age_days": 7
+            "max_video_age_days": 7,
+            "credential": {  # 新增：用户凭证配置
+                "sessdata": "",
+                "bili_jct": "",
+                "buvid3": ""
+            }
         }
         config_path = os.path.join(os.path.dirname(__file__), "config.json")
         if os.path.exists(config_path):
@@ -69,49 +74,104 @@ class BiliRandomVideo(Star):
             logger.info("未找到配置文件，使用默认配置")
         return default_config
 
-    def reload_config(self):
-        self.config = self._load_config()
-        logger.info("配置已重载")
-
     @event_message_type(EventMessageType.ALL)
-    async def on_message(self, event: AstrMessageEvent) -> MessageEventResult:
+    async def on_message(self, event: AstrMessageEvent) -> Optional[MessageEventResult]:
         msg = event.message_str.strip()
-
-        # 命令：重载配置
+        logger.debug(f"收到消息: {msg}")
+        
         if msg == "!bili reload":
-            self.reload_config()
+            self.config = self._load_config()
+            self._init_credential()
             return event.plain_result("✅ 配置已重新加载")
-
-        # 关键词检测
+        
         keywords = self.config.get("keywords", ["随机视频"])
         if not any(kw in msg for kw in keywords):
-            return event.plain_result(None)  # 不匹配，无回复
-
-        # 可选：发送“正在搬运”提示
+            return None
+        
         if self.config.get("show_processing", True):
             await event.send(event.plain_result("🎬 正在搬运，请稍等~"))
-
-        # 获取随机视频
+        
         video = await self.fetch_random_video()
         if not video:
             return event.plain_result("❌ 获取视频失败，请稍后再试")
-
-        # 发送结果
-        send_type = self.config.get("send_type", "image")
-        text = self._format_video_text(video)
-        if send_type == "image" and video.get("pic"):
+        
+        if self.config.get("send_type", "image") == "image" and video.get("pic"):
             try:
-                chain = [Image.fromURL(video["pic"]), Plain(text)]
+                chain = [Image.fromURL(video["pic"]), Plain(self._format_video_text(video))]
                 await event.send(event.make_result().message(chain))
             except Exception as e:
-                logger.error(f"图片发送失败: {e}，降级为纯文本")
-                await event.send(event.plain_result(text))
+                logger.error(f"图片发送失败: {e}")
+                await event.send(event.plain_result(self._format_video_text(video)))
         else:
-            await event.send(event.plain_result(text))
+            await event.send(event.plain_result(self._format_video_text(video)))
+        return None
 
-        return event.plain_result(None)
+    async def fetch_random_video(self) -> Optional[Dict[str, Any]]:
+        for attempt in range(self.config.get("max_retries", 3)):
+            try:
+                # 获取随机页的热门视频
+                page = random.randint(1, 10)
+                # 通过api获取热门视频列表
+                try:
+                    popular_list = await popular_series.get_popular_series()
+                    series_id = popular_list['list'][0]['series_id']
+                    # 根据certified检测是否需要异步处理
+                    hot_videos = await popular_series.get_popular_series_video(series_id, self.credential)
+                    video_list = hot_videos.get('list', [])
+                except:
+                    # 备用接口：尝试获取全站热门
+                    video_list = await popular_series.get_popular_videos(ps=30, pn=page, credential=self.credential)
+                    video_list = video_list.get('list', [])
+                
+                if not video_list:
+                    logger.warning("未获取到热门视频列表")
+                    continue
+                
+                random_video = random.choice(video_list)
+                bvid = random_video.get('bvid')
+                if not bvid:
+                    continue
+                
+                # 获取详细信息
+                video_info = await video.Video(bvid=bvid, credential=self.credential).get_info()
+                
+                # 时效性检查
+                if self.config.get("max_video_age_days", 0) > 0:
+                    import time
+                    pub_ts = video_info.get('pubdate', 0)
+                    if pub_ts and (time.time() - pub_ts) > self.config['max_video_age_days'] * 86400:
+                        logger.debug(f"视频过旧，跳过: {bvid}")
+                        continue
+                
+                stats = video_info.get('stat', {})
+                return {
+                    'bvid': bvid,
+                    'title': video_info.get('title'),
+                    'owner': video_info.get('owner', {}).get('name'),
+                    'pic': video_info.get('pic'),
+                    'url': f"https://www.bilibili.com/video/{bvid}",
+                    'view': self._format_number(stats.get('view', 0)),
+                    'like': self._format_number(stats.get('like', 0)),
+                    'coin': self._format_number(stats.get('coin', 0)),
+                    'favorite': self._format_number(stats.get('favorite', 0)),
+                    'danmaku': self._format_number(stats.get('danmaku', 0))
+                }
+            except Exception as e:
+                logger.error(f"获取视频失败 (尝试 {attempt+1}): {e}")
+                continue
+        return None
 
-    def _format_video_text(self, video: dict) -> str:
+    @staticmethod
+    def _format_number(num: int) -> str:
+        """格式化数字显示"""
+        if num >= 100000000:
+            return f"{num/100000000:.1f}亿"
+        if num >= 10000:
+            return f"{num/10000:.1f}万"
+        return str(num)
+
+    @staticmethod
+    def _format_video_text(video: dict) -> str:
         return (
             f"🎬 {video['title']}\n"
             f"👤 {video['owner']}\n"
@@ -119,89 +179,3 @@ class BiliRandomVideo(Star):
             f"💬 {video['danmaku']}  📺 {video['view']}\n"
             f"🔗 {video['url']}"
         )
-
-    # ------------------- B站API（带WBI签名）-------------------
-    async def fetch_json(self, url: str, params: dict = None) -> Optional[Dict]:
-        """通用GET请求，自动添加WBI签名"""
-        try:
-            async with aiohttp.ClientSession(timeout=10) as session:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Referer": "https://www.bilibili.com/"
-                }
-                # 为参数添加 WBI 签名（仅当有参数时才执行）
-                if params:
-                    params = wbi_sign(params)
-                async with session.get(url, headers=headers, params=params) as resp:
-                    data = await resp.json()
-                    if data.get("code") == 0:
-                        return data
-                    logger.warning(f"API错误码 {data.get('code')}: {data.get('message')}")
-                    return None
-        except Exception as e:
-            logger.error(f"请求失败 {url}: {e}")
-            return None
-
-    async def fetch_random_video(self) -> Optional[Dict[str, Any]]:
-        max_retries = self.config.get("max_retries", 3)
-        hot_series_id = self.config.get("hot_series_id", 0)
-        max_age_days = self.config.get("max_video_age_days", 7)
-
-        for _ in range(max_retries):
-            if hot_series_id == 0:
-                # 全站热门列表接口（需要签名，但此接口一般不需要参数，所以直接请求）
-                hot_url = "https://api.bilibili.com/x/web-interface/popular"
-                hot_data = await self.fetch_json(hot_url, {})  # 传空字典以触发签名
-                video_list = hot_data.get('data') if hot_data else None
-            else:
-                hot_url = f"https://api.bilibili.com/x/web-interface/popular/series/one"
-                params = {"series_id": hot_series_id}
-                hot_data = await self.fetch_json(hot_url, params)
-                video_list = hot_data.get('data', {}).get('list') if hot_data else None
-
-            if not video_list:
-                logger.warning("未获取到热门视频列表")
-                continue
-
-            random_video = random.choice(video_list)
-            bvid = random_video.get('bvid')
-            if not bvid:
-                continue
-
-            # 获取视频详细信息（需要签名）
-            detail_params = {"bvid": bvid}
-            detail_data = await self.fetch_json("https://api.bilibili.com/x/web-interface/view", detail_params)
-            if not detail_data or not detail_data.get('data'):
-                continue
-
-            v = detail_data['data']
-            # 时效性过滤
-            if max_age_days > 0:
-                pub_ts = v.get('pubdate', 0)
-                if pub_ts and (time.time() - pub_ts) > max_age_days * 86400:
-                    logger.debug(f"视频过旧，跳过: {bvid}")
-                    continue
-
-            stats = v.get('stat', {})
-            return {
-                'bvid': bvid,
-                'title': v.get('title'),
-                'owner': v.get('owner', {}).get('name'),
-                'pic': v.get('pic'),
-                'url': f"https://www.bilibili.com/video/{bvid}",
-                'view': self._format_number(stats.get('view', 0)),
-                'like': self._format_number(stats.get('like', 0)),
-                'coin': self._format_number(stats.get('coin', 0)),
-                'favorite': self._format_number(stats.get('favorite', 0)),
-                'danmaku': self._format_number(stats.get('danmaku', 0))
-            }
-
-        return None
-
-    @staticmethod
-    def _format_number(num: int) -> str:
-        if num >= 100000000:
-            return f"{num/100000000:.1f}亿"
-        if num >= 10000:
-            return f"{num/10000:.1f}万"
-        return str(num)
