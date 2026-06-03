@@ -36,8 +36,7 @@
 
 
 
-
-### ⚙️ 配置
+# ⚙️ 配置
 插件配置文件位于 data/plugins/Astrbot_plugin_bili_Randomvideoshit/_conf_schema.json，可通过 AstrBot WebUI 的“插件配置”界面修改，或直接编辑 JSON 文件。
 
 配置项	类型	默认值	说明
@@ -50,7 +49,7 @@ blacklist_groups	array	[]	黑名单群组 ID 列表
 keywords	array	["随机视频", "来点视频", "B站视频"]	触发关键词列表
 注意：群组 ID 可通过机器人收到的消息日志获取，格式通常为纯数字字符串。
 
-### 📝 命令
+# 📝 命令
 所有命令均以 /bili 或 bili 开头，在私聊或群聊中均可使用。
 
 命令	说明
@@ -67,7 +66,7 @@ keywords	array	["随机视频", "来点视频", "B站视频"]	触发关键词列
 关键词触发
 在群聊中发送包含配置中 keywords 关键词的消息（例如“随机视频”），机器人会自动推送一个随机视频，并进入冷却时间（默认 10 分钟）。
 
-### 🔐 首次使用
+# 🔐 首次使用
 登录 B 站账号
 在私聊或群聊中发送 /bili login，机器人会生成一个二维码。使用 B 站手机 App 扫码并确认登录，Cookie 会自动保存，之后即可正常使用。
 
@@ -77,7 +76,7 @@ keywords	array	["随机视频", "来点视频", "B站视频"]	触发关键词列
 开启定时推送（可选）
 默认插件启动时自动开启定时推送，如需关闭可发送 /bili off，重新开启用 /bili on。
 
-### 🛠️ 常见问题
+# 🛠️ 常见问题
 1. 扫码登录后提示“未获取到 Cookie”？
 网络波动可能导致 Cookie 提取失败，请重新执行 /bili login 再试一次。
 
@@ -98,7 +97,7 @@ keywords	array	["随机视频", "来点视频", "B站视频"]	触发关键词列
 5. 提示“异步生成器错误”？
 请确保您使用的 AstrBot 版本为 v4.25.1 或更高，并已正确安装所有依赖。
 
-### 📄 依赖
+# 📄 依赖
 aiohttp - 异步 HTTP 请求
 
 qrcode - 生成登录二维码
@@ -109,13 +108,13 @@ cryptography - Cookie 加密存储
 
 bash
 pip install aiohttp qrcode cryptography
-### 🤝 贡献
+# 🤝 贡献
 欢迎提交 Issue 和 Pull Request！
 
-### 📜 许可证
+# 📜 许可证
 本项目采用 MIT 许可证。
 
-### 🔗 相关链接
+# 🔗 相关链接
 AstrBot 项目主页
 
 插件仓库
