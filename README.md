@@ -1,6 +1,4 @@
 AstrBot 插件 - B站随机视频搬运
-https://img.shields.io/badge/AstrBot-v4.25.1+-blue
-https://img.shields.io/badge/license-MIT-green
 
 📖 简介
 Astrbot_plugin_bili_Randomvideoshit 是一款为 AstrBot 开发的 B 站随机视频搬运插件。它能够自动获取 B 站热门视频，并在群聊中通过命令或关键词触发推送，也支持定时自动推送。
