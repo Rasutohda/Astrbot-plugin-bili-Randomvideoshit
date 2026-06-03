@@ -37,7 +37,7 @@
 
 
 # ⚙️ 配置
-### 插件配置文件位于 data/plugins/Astrbot_plugin_bili_Randomvideoshit/_conf_schema.json，可通过 AstrBot WebUI 的“插件配置”界面修改，或直接编辑 JSON 文件。
+## 插件配置文件位于 data/plugins/Astrbot_plugin_bili_Randomvideoshit/_conf_schema.json，可通过 AstrBot WebUI 的“插件配置”界面修改，或直接编辑 JSON 文件。
 
    ### 配置项	类型	默认值	说明
 auto_start	bool	true	插件启动时自动开启定时推送
@@ -51,7 +51,7 @@ keywords	array	["随机视频", "来点视频", "B站视频"]	触发关键词列
 注意：群组 ID 可通过机器人收到的消息日志获取，格式通常为纯数字字符串。
 
 # 📝 命令
-### 所有命令均以 /bili 或 bili 开头，在私聊或群聊中均可使用。
+## 所有命令均以 /bili 或 bili 开头，在私聊或群聊中均可使用。
 
 ### 命令	说明
 /bili now	立即推送一个随机视频（手动调用有 60 秒冷却）
