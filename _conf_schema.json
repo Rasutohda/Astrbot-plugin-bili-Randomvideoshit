@@ -27,14 +27,10 @@
         "type": "int",
         "default": 7
     },
-    "credential": {
-        "description": "B站登录凭证",
-        "type": "dict",
-        "hint": "用于规避风控，提高请求稳定性",
-        "props": {
-            "sessdata": {"type": "string", "description": "SESSDATA Cookie值", "default": ""},
-            "bili_jct": {"type": "string", "description": "bili_jct Cookie值", "default": ""},
-            "buvid3": {"type": "string", "description": "buvid3 Cookie值", "default": ""}
-        }
+    "cookie": {
+        "description": "B站登录Cookie",
+        "type": "string",
+        "hint": "从浏览器复制Cookie字符串，例如: SESSDATA=xxx; bili_jct=xxx; buvid3=xxx",
+        "default": ""
     }
 }
