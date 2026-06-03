@@ -3,13 +3,13 @@ import asyncio
 import httpx
 import traceback
 from typing import Optional, Dict, Any, List
-from astrbot.api.event import AstrMessageEvent, event_handler
+from astrbot.api.event import AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.api.message_components import Plain, At, Image
 
 @register("astrbot_plugin_bili_random", "Rasutohda",
-          "有人@机器人时随机搬运B站视频（分区/图片/敏感词）", "2.0.4",
+          "有人@机器人时随机搬运B站视频（分区/图片/敏感词）", "2.0.5",
           "https://github.com/Rasutohda/Astrbot_plugin_bili_Randomvideoshit")
 class BiliRandomVideo(Star):
     def __init__(self, context: Context):
@@ -171,21 +171,26 @@ class BiliRandomVideo(Star):
                 logger.error(f"图片发送失败: {e}")
         await event.reply(Plain(text))
 
-    # ------------------- 事件处理（核心）-------------------
-    @event_handler
-    async def on_message(self, event: AstrMessageEvent) -> bool:
-        """处理所有消息，返回True放行，False拦截"""
+    # ------------------- 核心事件处理（重写 handle_event） -------------------
+    async def handle_event(self, event: Any) -> bool:
+        """AstrBot 事件入口，返回 True 继续传播，False 阻止传播"""
+        # 只处理消息事件
+        if not isinstance(event, AstrMessageEvent):
+            return True  # 非消息事件，放行
+        
         msg = event.message_str.strip()
-        # 重载命令
+        logger.debug(f"收到消息: {msg}")
+        
+        # 命令：/bili reload
         if msg == "/bili reload":
             self.load_config()
             await event.reply("✅ 配置已重载")
-            return False
-
-        # 检查是否@机器人
+            return False  # 阻止继续传播
+        
+        # 检测是否@机器人
         if not await self._is_at_me(event):
             return True   # 不是@我，放行
-
+        
         # 处理@消息
         if self.show_processing:
             await event.reply("🎥 正在随机搬运，请稍等...")
@@ -195,7 +200,7 @@ class BiliRandomVideo(Star):
         else:
             await event.reply("❌ 获取视频失败，请稍后再试")
         return False   # 拦截消息，不再传递给其他插件
-
+    
     async def _is_at_me(self, event: AstrMessageEvent) -> bool:
         """检测是否被@"""
         # 尝试内置方法
