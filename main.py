@@ -10,9 +10,10 @@ import aiohttp
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import IntEnum
 from contextlib import suppress
+from http.cookies import SimpleCookie
 
 import qrcode
 
@@ -40,31 +41,41 @@ class QRCodeStatus(IntEnum):
 QR_CODE_EXPIRE_TIME = 180
 POLL_INTERVAL = 5
 MAX_RETRIES = 3
-SENT_TITLES_MAX_ITEMS = 2000
-WBI_KEY_CACHE_TTL = 3600  # 缓存WBI密钥1小时
+SENT_VIDEOS_RETENTION_DAYS = 7          # 保留最近7天的发送记录
+WBI_KEY_CACHE_TTL = 3600                # 缓存WBI密钥1小时
+MANUAL_COOLDOWN_SECONDS = 60            # 手动命令冷却时间
+BATCH_SEND_SIZE = 5                     # 定时推送分批发送数量
+BATCH_SEND_INTERVAL = 1                 # 分批间隔秒数
 
-# ---------- WBI签名（带缓存）----------
+# ---------- WBI签名（线程安全缓存 + 加锁）----------
 class WbiHelper:
     _cache = {"keys": None, "expire_at": 0}
+    _lock = asyncio.Lock()
 
     @classmethod
     async def get_keys(cls, session: aiohttp.ClientSession) -> Tuple[str, str]:
-        now = time.time()
-        if cls._cache["keys"] and now < cls._cache["expire_at"]:
-            return cls._cache["keys"]
-        
-        headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/'}
-        async with session.get('https://api.bilibili.com/x/web-interface/nav', headers=headers) as resp:
-            data = await resp.json()
-            if data.get('code') != 0:
-                raise Exception("获取WBI密钥失败")
-            img_url = data['data']['wbi_img']['img_url']
-            sub_url = data['data']['wbi_img']['sub_url']
-            img_key = re.search(r'/([^/]+)\.png', img_url).group(1)
-            sub_key = re.search(r'/([^/]+)\.png', sub_url).group(1)
-            cls._cache["keys"] = (img_key, sub_key)
-            cls._cache["expire_at"] = now + WBI_KEY_CACHE_TTL
-            return img_key, sub_key
+        async with cls._lock:
+            now = time.time()
+            if cls._cache["keys"] and now < cls._cache["expire_at"]:
+                return cls._cache["keys"]
+            
+            headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/'}
+            try:
+                async with session.get('https://api.bilibili.com/x/web-interface/nav', headers=headers) as resp:
+                    data = await resp.json()
+                    if data.get('code') != 0:
+                        raise Exception(f"获取WBI密钥失败: {data.get('message')}")
+                    img_url = data['data']['wbi_img']['img_url']
+                    sub_url = data['data']['wbi_img']['sub_url']
+                    img_key = re.search(r'/([^/]+)\.png', img_url).group(1)
+                    sub_key = re.search(r'/([^/]+)\.png', sub_url).group(1)
+                    cls._cache["keys"] = (img_key, sub_key)
+                    cls._cache["expire_at"] = now + WBI_KEY_CACHE_TTL
+                    return img_key, sub_key
+            except Exception as e:
+                cls._cache["keys"] = None
+                cls._cache["expire_at"] = 0
+                raise e
 
     @staticmethod
     def sign(params: dict, img_key: str, sub_key: str) -> dict:
@@ -83,9 +94,6 @@ def format_number(num: int) -> str:
         return f"{num/1_0000:.1f}万"
     return str(num)
 
-def normalize_title(title: str) -> str:
-    return re.sub(r'\s+', ' ', title).strip().lower()
-
 def atomic_write_json(path: Path, data: dict):
     """原子写入JSON文件"""
     tmp_path = path.with_suffix(".tmp")
@@ -94,7 +102,7 @@ def atomic_write_json(path: Path, data: dict):
 
 # ---------- 插件主类 ----------
 @register("astrbot_plugin_bili_Randomvideoshit", "Rasutohda",
-          "B站随机视频搬运｜扫码登录｜关键词触发｜定时推送", "3.4.1",
+          "B站随机视频搬运｜扫码登录｜关键词触发｜定时推送", "3.5.0",
           "https://github.com/Rasutohda/astrbot_plugin_bili_Randomvideoshit")
 class BiliRandomVideo(Star):
     def __init__(self, context: Context, config: dict = None):
@@ -105,10 +113,9 @@ class BiliRandomVideo(Star):
         self.session = None
         self.cookie = self._load_cookie()
         self.bound_groups: Dict[str, str] = self._load_json("bound_groups.json", {})
-        self.sent_titles: Dict[str, dict] = self._load_json("sent_titles.json", {})
+        self.sent_videos: Dict[str, dict] = self._load_json("sent_videos.json", {})  # key: bvid
         self.group_cooldown: Dict[str, float] = self._load_json("group_cooldown.json", {})
-        self.manual_cooldown = 60
-        self.last_manual_time = 0.0
+        self.manual_cooldown: Dict[str, float] = {}   # key: user_id 或 group_id（私聊用user_id）
         self._login_tasks: Dict[str, asyncio.Task] = {}
 
     # ---------- 配置管理 ----------
@@ -123,7 +130,6 @@ class BiliRandomVideo(Star):
             'keywords': ["随机视频", "来点视频", "B站视频"]
         }
         merged = {**default, **user_config}
-        # 保存默认配置到文件
         if not CONFIG_FILE.exists():
             atomic_write_json(CONFIG_FILE, merged)
         return merged
@@ -149,11 +155,19 @@ class BiliRandomVideo(Star):
             return ""
 
     def _save_cookie(self, cookie: str):
+        # 安全提示：cookie.txt 包含敏感信息，请确保文件权限正确
         (DATA_DIR / "cookie.txt").write_text(cookie, encoding='utf-8')
 
     # ---------- 初始化/卸载 ----------
     async def initialize(self):
-        self.session = aiohttp.ClientSession()
+        # 配置超时 (总超时30秒，连接超时10秒)
+        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        self.session = aiohttp.ClientSession(timeout=timeout)
+        # 清理过期数据
+        self._clean_expired_cooldown()
+        self._clean_old_sent_videos()
+        # 清理残留的二维码图片
+        self._clean_qr_images()
         if self.config.get('auto_start', True):
             self.running = True
             self.task = asyncio.create_task(self._timer_loop())
@@ -167,16 +181,24 @@ class BiliRandomVideo(Star):
                 await self.task
         if self.session:
             await self.session.close()
+        # 清理所有进行中的登录任务
+        for task in self._login_tasks.values():
+            task.cancel()
+        # 清理临时二维码文件
+        self._clean_qr_images()
         logger.info("B站随机视频搬运插件已卸载")
 
-    # ---------- 后台定时循环 ----------
+    # ---------- 后台定时循环（带异常容错）----------
     async def _timer_loop(self):
         interval = max(60, self.config.get('scan_interval', 3600))
         while self.running:
-            await self._push_to_all_allowed_groups()
+            try:
+                await self._push_to_all_allowed_groups()
+            except Exception as e:
+                logger.exception("定时推送过程中发生异常")
             await asyncio.sleep(interval)
 
-    # ---------- 网络请求（带重试）----------
+    # ---------- 网络请求（带重试，支持限流退避）----------
     async def _fetch_json(self, url: str, params: dict, need_sign: bool = False, retry: int = MAX_RETRIES) -> Optional[dict]:
         for attempt in range(retry):
             try:
@@ -190,34 +212,42 @@ class BiliRandomVideo(Star):
                     data = await resp.json()
                     if data.get('code') == 0:
                         return data
+                    elif data.get('code') == -509:  # 请求过于频繁
+                        wait = 2 ** attempt + random.uniform(0, 1)
+                        logger.warning(f"API限流(-509)，等待 {wait:.1f} 秒后重试 ({attempt+1}/{retry})")
+                        await asyncio.sleep(wait)
+                        continue
                     else:
                         logger.warning(f"API返回非0: {url}, code={data.get('code')}, msg={data.get('message')}")
+            except asyncio.TimeoutError:
+                logger.warning(f"请求超时 ({attempt+1}/{retry}): {url}")
             except Exception as e:
                 logger.warning(f"请求失败 ({attempt+1}/{retry}): {url}, 错误: {e}")
-                if attempt < retry - 1:
-                    await asyncio.sleep(2 ** attempt)
+            if attempt < retry - 1:
+                await asyncio.sleep(2 ** attempt + random.uniform(0, 0.5))
         return None
 
-    # ---------- 核心视频获取 ----------
+    # ---------- 核心视频获取（优化：过滤已发送 bvid）----------
     async def _fetch_random_video(self) -> Optional[dict]:
         # 先尝试获取热门系列
         params = {"series_id": 0}
         data = await self._fetch_json("https://api.bilibili.com/x/web-interface/popular/series/one", params, need_sign=True)
         video_list = data.get('data', {}).get('list', []) if data else []
         if not video_list:
-            data = await self._fetch_json("https://api.bilibili.com/x/web-interface/popular", {"pn": 1, "ps": 30}, need_sign=True)
+            data = await self._fetch_json("https://api.bilibili.com/x/web-interface/popular", {"pn": 1, "ps": 50}, need_sign=True)
             video_list = data.get('data', {}).get('list', []) if data else []
         if not video_list:
             return None
 
-        # 清理过期的 sent_titles
-        self._clean_sent_titles()
+        # 过滤掉已经发送过的视频
+        candidate_videos = [v for v in video_list if v.get('bvid') not in self.sent_videos]
+        if not candidate_videos:
+            logger.warning("所有热门视频都已推送过，等待新视频")
+            return None
 
-        for _ in range(10):
-            video = random.choice(video_list)
-            title = video.get('title', '')
-            if not title or normalize_title(title) in self.sent_titles:
-                continue
+        # 随机选择一个候选视频
+        for _ in range(5):
+            video = random.choice(candidate_videos)
             detail = await self._fetch_json("https://api.bilibili.com/x/web-interface/view",
                                             {"bvid": video['bvid']}, need_sign=True)
             if not detail:
@@ -225,6 +255,7 @@ class BiliRandomVideo(Star):
             info = detail['data']
             stats = info.get('stat', {})
             return {
+                'bvid': info['bvid'],
                 'title': info.get('title'),
                 'author': info.get('owner', {}).get('name'),
                 'pic': info.get('pic'),
@@ -237,15 +268,37 @@ class BiliRandomVideo(Star):
             }
         return None
 
-    def _clean_sent_titles(self):
-        """清理过期的已推送标题记录，保留最近N条"""
-        if len(self.sent_titles) > SENT_TITLES_MAX_ITEMS:
-            # 按时间排序，删除旧的
-            sorted_items = sorted(self.sent_titles.items(), key=lambda x: x[1].get('sent_at', ''))
-            to_delete = sorted_items[:len(sorted_items) - SENT_TITLES_MAX_ITEMS]
-            for key, _ in to_delete:
-                del self.sent_titles[key]
-            self._save_json("sent_titles.json", self.sent_titles)
+    def _clean_old_sent_videos(self):
+        """清理超过保留天数的已推送视频记录"""
+        cutoff = datetime.now() - timedelta(days=SENT_VIDEOS_RETENTION_DAYS)
+        to_delete = []
+        for bvid, info in self.sent_videos.items():
+            try:
+                sent_at = datetime.fromisoformat(info.get('sent_at', '2000-01-01'))
+                if sent_at < cutoff:
+                    to_delete.append(bvid)
+            except:
+                to_delete.append(bvid)
+        for bvid in to_delete:
+            del self.sent_videos[bvid]
+        if to_delete:
+            self._save_json("sent_videos.json", self.sent_videos)
+            logger.info(f"清理了 {len(to_delete)} 条过期的视频发送记录")
+
+    def _clean_expired_cooldown(self):
+        """删除超过24小时的群冷却记录"""
+        now = time.time()
+        expired = [gid for gid, ts in self.group_cooldown.items() if now - ts > 86400]
+        if expired:
+            for gid in expired:
+                del self.group_cooldown[gid]
+            self._save_json("group_cooldown.json", self.group_cooldown)
+            logger.info(f"清理了 {len(expired)} 个过期的冷却记录")
+
+    def _clean_qr_images(self):
+        """清理 data 目录下所有临时二维码图片"""
+        for p in DATA_DIR.glob("qrcode_*.png"):
+            p.unlink()
 
     # ---------- 消息构建与发送 ----------
     def _build_message_chain(self, video: dict) -> list:
@@ -266,34 +319,43 @@ class BiliRandomVideo(Star):
         else:
             await self.context.send_message(target, chain)
 
-    async def _push_to_target_group(self, event: AstrMessageEvent, group_id: str) -> bool:
+    async def _push_to_target_group(self, event: AstrMessageEvent) -> bool:
         """通过事件推送视频到当前群/私聊"""
         video = await self._fetch_random_video()
         if not video:
             await event.send(event.plain_result("❌ 没找到合适的视频"))
             return False
         await self._send_to_target(event, video)
-        self._record_sent_title(video['title'])
+        self._record_sent_video(video)
         return True
 
     async def _push_to_all_allowed_groups(self):
-        """定时推送到所有允许的群聊"""
+        """定时推送到所有允许的群聊（分批发送）"""
         video = await self._fetch_random_video()
         if not video:
             return
         chain = self._build_message_chain(video)
-        tasks = []
-        for gid, umo in self.bound_groups.items():
-            if self._is_allowed(gid):
-                tasks.append(self.context.send_message(umo, chain))
-        if tasks:
-            await asyncio.gather(*tasks)
-        self._record_sent_title(video['title'])
+        allowed_groups = [(gid, umo) for gid, umo in self.bound_groups.items() if self._is_allowed(gid)]
+        if not allowed_groups:
+            return
 
-    def _record_sent_title(self, title: str):
-        norm = normalize_title(title)
-        self.sent_titles[norm] = {'sent_at': datetime.now().isoformat()}
-        self._save_json("sent_titles.json", self.sent_titles)
+        # 分批发送
+        for i in range(0, len(allowed_groups), BATCH_SEND_SIZE):
+            batch = allowed_groups[i:i+BATCH_SEND_SIZE]
+            tasks = [self.context.send_message(umo, chain) for _, umo in batch]
+            await asyncio.gather(*tasks)
+            if i + BATCH_SEND_SIZE < len(allowed_groups):
+                await asyncio.sleep(BATCH_SEND_INTERVAL)
+        self._record_sent_video(video)
+
+    def _record_sent_video(self, video: dict):
+        """使用bvid记录已发送的视频"""
+        bvid = video['bvid']
+        self.sent_videos[bvid] = {
+            'sent_at': datetime.now().isoformat(),
+            'title': video['title']
+        }
+        self._save_json("sent_videos.json", self.sent_videos)
 
     def _is_allowed(self, group_id: str) -> bool:
         mode = self.config.get('use_whitelist_mode', False)
@@ -307,7 +369,7 @@ class BiliRandomVideo(Star):
             self._save_json("bound_groups.json", self.bound_groups)
             logger.info(f"📌 自动记录新群: {group_id}")
 
-    # ---------- 扫码登录 ----------
+    # ---------- 扫码登录（修复Cookie解析）----------
     async def _generate_qrcode_image(self, url: str, unique_id: str) -> Optional[Path]:
         try:
             qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=4)
@@ -342,15 +404,14 @@ class BiliRandomVideo(Star):
                 code = poll_data.get("data", {}).get("code", -1)
 
                 if code == QRCodeStatus.SUCCESS:
-                    cookie_dict = {}
+                    # 正确解析 SimpleCookie
+                    cookie_jar = SimpleCookie()
                     for header in set_cookie_headers:
-                        cookie_part = header.split(';')[0].strip()
-                        if '=' in cookie_part:
-                            k, v = cookie_part.split('=', 1)
-                            cookie_dict[k] = v
-                    sessdata = cookie_dict.get('SESSDATA', '')
-                    bili_jct = cookie_dict.get('bili_jct', '')
-                    buvid3 = cookie_dict.get('buvid3', '')
+                        cookie_jar.load(header)
+                    # 安全取值
+                    sessdata = cookie_jar.get('SESSDATA', '').value if 'SESSDATA' in cookie_jar else ''
+                    bili_jct = cookie_jar.get('bili_jct', '').value if 'bili_jct' in cookie_jar else ''
+                    buvid3 = cookie_jar.get('buvid3', '').value if 'buvid3' in cookie_jar else ''
                     if sessdata and bili_jct:
                         cookie_str = f"SESSDATA={sessdata}; bili_jct={bili_jct}; buvid3={buvid3}"
                         self.cookie = cookie_str
@@ -359,6 +420,8 @@ class BiliRandomVideo(Star):
                         break
                     else:
                         logger.warning("登录成功但Cookie提取失败")
+                        await self._notify_user(origin, "⚠️ 登录成功但无法提取完整Cookie，请手动检查")
+                        break
 
                 elif code == QRCodeStatus.SCANNED:
                     if last_notified_status != QRCodeStatus.SCANNED:
@@ -383,7 +446,6 @@ class BiliRandomVideo(Star):
                 del self._login_tasks[sender_id]
 
     async def _notify_user(self, origin: str, message: str):
-        """origin为unified_msg_origin字符串"""
         try:
             await self.context.send_message(origin, message)
         except Exception as e:
@@ -418,13 +480,15 @@ class BiliRandomVideo(Star):
         # 关键词触发（仅群聊）
         if is_group:
             keywords = self.config.get('keywords', [])
-            if any(kw in msg for kw in keywords):
+            # 避免多个关键词同时匹配导致多次触发
+            triggered = any(kw in msg for kw in keywords)
+            if triggered:
                 now = time.time()
                 cooldown = self.config.get('keyword_cooldown_seconds', 600)
                 last = self.group_cooldown.get(group_id, 0)
                 if now - last >= cooldown:
                     await event.send(event.plain_result("🎬 检测到关键词，正在搬运视频..."))
-                    success = await self._push_to_target_group(event, group_id)
+                    success = await self._push_to_target_group(event)
                     if success:
                         self.group_cooldown[group_id] = now
                         self._save_json("group_cooldown.json", self.group_cooldown)
@@ -451,10 +515,12 @@ class BiliRandomVideo(Star):
             await self._cmd_mode(event, args[0])
         elif cmd == 'interval' and args:
             await self._cmd_interval(event, args[0])
+        elif cmd == 'clear':
+            await self._cmd_clear(event)
         elif cmd == 'help':
             await self._cmd_help(event)
         else:
-            await event.send(event.plain_result("可用命令: bili now, on, off, login, status, mode, interval, help"))
+            await event.send(event.plain_result("可用命令: bili now, on, off, login, status, mode, interval, clear, help"))
 
     async def _cmd_help(self, event: AstrMessageEvent):
         help_text = (
@@ -466,21 +532,24 @@ class BiliRandomVideo(Star):
             "• bili status - 查看当前状态\n"
             "• bili mode whitelist/blacklist - 切换群聊模式\n"
             "• bili interval <秒> - 设置定时推送间隔(>=60)\n"
+            "• bili clear - 清除当前群的关键词冷却\n"
             "• bili help - 显示本帮助\n"
             "关键词触发: 在群内发送“随机视频”、“来点视频”、“B站视频”即可触发推送（有冷却）"
         )
         await event.send(event.plain_result(help_text))
 
     async def _cmd_now(self, event: AstrMessageEvent):
+        # 获取冷却key：群聊用群ID，私聊用用户ID
+        cooldown_key = str(event.message_obj.group_id) if event.message_obj.group_id else event.get_sender_id()
         now = time.time()
-        if now - self.last_manual_time < self.manual_cooldown:
-            remain = int(self.manual_cooldown - (now - self.last_manual_time))
-            await event.send(event.plain_result(f"⏳ 冷却中，请 {remain} 秒后再试"))
+        last = self.manual_cooldown.get(cooldown_key, 0)
+        if now - last < MANUAL_COOLDOWN_SECONDS:
+            remain = int(MANUAL_COOLDOWN_SECONDS - (now - last))
+            await event.send(event.plain_result(f"⏳ 手动调用冷却中，请 {remain} 秒后再试"))
             return
-        self.last_manual_time = now
+        self.manual_cooldown[cooldown_key] = now
         await event.send(event.plain_result("🎬 正在搬石，请稍候..."))
-        group_id = str(event.message_obj.group_id) if event.message_obj.group_id else "private"
-        await self._push_to_target_group(event, group_id)
+        await self._push_to_target_group(event)
 
     async def _cmd_on(self, event: AstrMessageEvent):
         if self.running:
@@ -534,7 +603,6 @@ class BiliRandomVideo(Star):
 
             task = asyncio.create_task(self._poll_qr_login(sender_id, qrcode_key, qr_path, origin))
             self._login_tasks[sender_id] = task
-            # 任务完成后自动清理
             task.add_done_callback(lambda t: self._login_tasks.pop(sender_id, None))
 
         except Exception as e:
@@ -547,7 +615,7 @@ class BiliRandomVideo(Star):
             f"定时任务: {'✅ 运行中' if self.running else '❌ 已停止'}",
             f"推送间隔: {self.config.get('scan_interval', 3600)} 秒",
             f"关键词冷却: {self.config.get('keyword_cooldown_seconds', 600)} 秒",
-            f"已记录标题: {len(self.sent_titles)} 个",
+            f"已发送视频: {len(self.sent_videos)} 个",
             f"已绑定群: {len(self.bound_groups)} 个",
             f"Cookie状态: {'✅ 已配置' if self.cookie else '❌ 未配置'}",
             f"群模式: {'白名单' if self.config.get('use_whitelist_mode', False) else '黑名单'}",
@@ -574,3 +642,16 @@ class BiliRandomVideo(Star):
             await event.send(event.plain_result(f"✅ 已设置定时推送间隔为 {sec} 秒"))
         except ValueError:
             await event.send(event.plain_result("请输入有效的数字"))
+
+    async def _cmd_clear(self, event: AstrMessageEvent):
+        """清除当前群的关键词冷却"""
+        group_id = str(event.message_obj.group_id) if event.message_obj.group_id else None
+        if not group_id:
+            await event.send(event.plain_result("❌ 该命令仅支持群聊"))
+            return
+        if group_id in self.group_cooldown:
+            del self.group_cooldown[group_id]
+            self._save_json("group_cooldown.json", self.group_cooldown)
+            await event.send(event.plain_result("✅ 已清除本群的关键词冷却"))
+        else:
+            await event.send(event.plain_result("本群当前没有冷却记录"))
