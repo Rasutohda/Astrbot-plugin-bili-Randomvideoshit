@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "region": {
+      "type": "string",
+      "title": "分区名称/ID",
+      "default": "",
+      "description": "例如：游戏、知识、音乐、4、36 等。留空=全站随机"
+    }
+  }
+}
