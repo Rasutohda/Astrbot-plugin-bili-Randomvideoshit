@@ -39,7 +39,7 @@
 # ⚙️ 配置
 ### 插件配置文件位于 data/plugins/Astrbot_plugin_bili_Randomvideoshit/_conf_schema.json，可通过 AstrBot WebUI 的“插件配置”界面修改，或直接编辑 JSON 文件。
 
-### 配置项	类型	默认值	说明
+   ### 配置项	类型	默认值	说明
 auto_start	bool	true	插件启动时自动开启定时推送
 scan_interval	int	3600	定时推送间隔（秒），最小 60 秒
 keyword_cooldown_seconds	int	600	关键词触发冷却时间（秒），0 表示无冷却
