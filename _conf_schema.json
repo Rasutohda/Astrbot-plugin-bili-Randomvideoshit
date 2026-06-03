@@ -4,5 +4,13 @@
         "type": "string",
         "default": "",
         "hint": "留空则使用全站排行榜"
+    },
+    "send_type": {
+        "description": "发送形式",
+        "type": "string",
+        "default": "link",
+        "enum": ["link", "image"],
+        "enumNames": ["仅链接 + 文字", "封面图片 + 文字"],
+        "hint": "link：发送纯文本链接；image：发送视频封面图片（同时附带文字信息）"
     }
 }
