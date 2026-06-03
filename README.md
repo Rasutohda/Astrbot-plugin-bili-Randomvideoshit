@@ -53,22 +53,22 @@
 ### 所有命令均以 /bili 或 bili 开头，在私聊或群聊中均可使用。
 
 ### 命令	说明
-## /bili now	立即推送一个随机视频（手动调用有 60 秒冷却）
-## /bili login	扫码登录 B 站账号（发送二维码图片）
-## /bili on	开启定时推送
-## /bili off	关闭定时推送
-## /bili status	查看插件当前状态（定时任务、Cookie、群组等）
-## /bili mode whitelist	切换为白名单模式（仅白名单群组接收推送）
-## /bili mode blacklist	切换为黑名单模式（黑名单群组不接收推送）
-## /bili interval <秒>	设置定时推送间隔（最小 60 秒）
-## /bili clear	清除当前群的关键词冷却记录（仅群聊）
-## /bili help	显示帮助信息
+/bili now	立即推送一个随机视频（手动调用有 60 秒冷却）
+/bili login	扫码登录 B 站账号（发送二维码图片）
+/bili on	开启定时推送
+/bili off	关闭定时推送
+/bili status	查看插件当前状态（定时任务、Cookie、群组等）
+/bili mode whitelist	切换为白名单模式（仅白名单群组接收推送）
+/bili mode blacklist	切换为黑名单模式（黑名单群组不接收推送）
+/bili interval <秒>	设置定时推送间隔（最小 60 秒）
+/bili clear	清除当前群的关键词冷却记录（仅群聊）
+/bili help	显示帮助信息
 ## 关键词触发
 在群聊中发送包含配置中 keywords 关键词的消息（例如“随机视频”），机器人会自动推送一个随机视频，并进入冷却时间（默认 10 分钟）。
 
 # 🔐 首次使用
 ## 登录 B 站账号
-## 在私聊或群聊中发送 /bili login，机器人会生成一个二维码。使用 B 站手机 App 扫码并确认登录，Cookie 会自动保存，之后即可正常使用。
+在私聊或群聊中发送 /bili login，机器人会生成一个二维码。使用 B 站手机 App 扫码并确认登录，Cookie 会自动保存，之后即可正常使用。
 
 ## 测试推送
 发送 /bili now 立即获取一个视频，检查是否正常。
@@ -106,7 +106,7 @@ cryptography - Cookie 加密存储
 
 ## 安装命令：
 
-```bash
+``bash
 pip install aiohttp qrcode cryptography
 # 🤝 贡献
 ## 欢迎提交 Issue 和 Pull Request！
