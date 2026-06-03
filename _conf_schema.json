@@ -1,0 +1,8 @@
+{
+    "region": {
+        "description": "B站分区名称或ID（例如：游戏、知识、音乐、4、36等）",
+        "type": "string",
+        "default": "",
+        "hint": "留空则使用全站排行榜"
+    }
+}
